@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, query, where, orderBy, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import FotoModal from './FotoModal';
 
 function esDriveUrl(url) {
   return url && url.includes('drive.google.com');
@@ -44,7 +46,7 @@ export default function Clientes() {
   const [resultados, setResultados] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [form, setForm] = useState({ nombre: '', apellido: '', direccion: '', telefono: '' });
+  const [form, setForm] = useState({ nombre: '', apellido: '', direccion: '', telefonoPrincipal: '381', telefonoSecundario: '' });
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [nuevoClienteId, setNuevoClienteId] = useState(null);
@@ -57,6 +59,11 @@ export default function Clientes() {
   const [editandoAlquiler, setEditandoAlquiler] = useState(null);
   const [editFormAlquiler, setEditFormAlquiler] = useState({});
   const [detalleAlquiler, setDetalleAlquiler] = useState(null);
+  const [fotoAmpliada, setFotoAmpliada] = useState(null);
+
+  useEffect(() => { setTimeout(initTopScrollbar, 300); }, [resultados, showHistorial]);
+
+  useEffect(() => { if (showHistorial && selected) { setTimeout(() => { document.getElementById('historial-cliente')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300); } }, [showHistorial, selected]);
 
   const buscar = async () => {
     const q = search.trim()
@@ -81,8 +88,10 @@ export default function Clientes() {
 
   const crearCliente = async (e) => {
     e.preventDefault();
+    const telCombined = form.telefonoPrincipal.trim() + (form.telefonoSecundario.trim() ? ' / ' + form.telefonoSecundario.trim() : '');
     const ref = await addDoc(collection(db, 'clientes'), {
       ...form,
+      telefono: telCombined,
       apellidoSearch: (form.apellido || '').toLowerCase(),
       nombreSearch: (form.nombre || '').toLowerCase(),
       createdAt: serverTimestamp()
@@ -90,7 +99,7 @@ export default function Clientes() {
     setMsg('Cliente creado correctamente');
     setNuevoClienteId(ref.id);
     setShowForm(false);
-    setForm({ nombre: '', apellido: '', direccion: '', telefono: '' });
+    setForm({ nombre: '', apellido: '', direccion: '', telefonoPrincipal: '381', telefonoSecundario: '' });
     buscar();
   };
 
@@ -124,6 +133,7 @@ export default function Clientes() {
 
   const abrirEditarAlquiler = (a) => {
     setEditandoAlquiler(a.id);
+    const partes = (a.clienteTelefono || '').split(' / ');
     setEditFormAlquiler({
       items: (a.items || []).map((i) => ({ ...i, file: null, preview: '' })),
       fechaAlquiler: a.fechaAlquiler || '',
@@ -131,7 +141,8 @@ export default function Clientes() {
       fechaDevolucion: a.fechaDevolucion || '',
       turno: a.turno || 'mañana',
       colegio: a.colegio || '',
-      telefono: a.clienteTelefono || '',
+      telefonoPrincipal: a.clienteTelefonoPrincipal || partes[0] || '',
+      telefonoSecundario: a.clienteTelefonoSecundario || partes[1] || '',
       precio: a.precio || '',
       seña: a.seña || '',
       garantia: a.garantia || '',
@@ -152,9 +163,12 @@ export default function Clientes() {
           itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
         }
       }
-      await updateDoc(doc(db, 'alquileres', id), {
+      const telCombined = editFormAlquiler.telefonoPrincipal.trim() + (editFormAlquiler.telefonoSecundario.trim() ? ' / ' + editFormAlquiler.telefonoSecundario.trim() : '');
+      const data = {
         items: itemsConFotos,
-        clienteTelefono: editFormAlquiler.telefono,
+        clienteTelefono: telCombined,
+        clienteTelefonoPrincipal: editFormAlquiler.telefonoPrincipal,
+        clienteTelefonoSecundario: editFormAlquiler.telefonoSecundario,
         fechaAlquiler: editFormAlquiler.fechaAlquiler,
         fechaEvento: editFormAlquiler.fechaEvento,
         fechaDevolucion: editFormAlquiler.fechaDevolucion,
@@ -166,7 +180,11 @@ export default function Clientes() {
         garantiaDevuelta: editFormAlquiler.garantiaDevuelta,
         nota: editFormAlquiler.nota,
         estado: editFormAlquiler.estado,
-      });
+      };
+      if (editFormAlquiler.estado === 'devuelto' && editFormAlquiler.garantia && !editFormAlquiler.garantiaDevuelta) {
+        data.garantiaDevuelta = true;
+      }
+      await updateDoc(doc(db, 'alquileres', id), data);
       setEditandoAlquiler(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
@@ -196,20 +214,25 @@ export default function Clientes() {
 
   const abrirEditar = (c) => {
     setEditando(c.id);
+    const partes = (c.telefono || '').split(' / ');
     setEditForm({
       nombre: c.nombre || '',
       apellido: c.apellido || '',
       direccion: c.direccion || '',
-      telefono: c.telefono || '',
+      telefonoPrincipal: c.telefonoPrincipal || partes[0] || '',
+      telefonoSecundario: c.telefonoSecundario || partes[1] || '',
     });
   };
 
   const guardarEdicion = async () => {
+    const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
     await updateDoc(doc(db, 'clientes', editando), {
       nombre: editForm.nombre,
       apellido: editForm.apellido,
       direccion: editForm.direccion,
-      telefono: editForm.telefono,
+      telefonoPrincipal: editForm.telefonoPrincipal,
+      telefonoSecundario: editForm.telefonoSecundario,
+      telefono: telCombined,
       apellidoSearch: (editForm.apellido || '').toLowerCase(),
       nombreSearch: (editForm.nombre || '').toLowerCase(),
     });
@@ -314,8 +337,12 @@ export default function Clientes() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Teléfono</label>
-                <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} />
+                <label>Celular principal</label>
+                <input value={form.telefonoPrincipal} onChange={(e) => setForm({ ...form, telefonoPrincipal: e.target.value })} placeholder="381..." />
+              </div>
+              <div className="form-group">
+                <label>Celular secundario</label>
+                <input value={form.telefonoSecundario} onChange={(e) => setForm({ ...form, telefonoSecundario: e.target.value })} placeholder="Opcional" />
               </div>
             </div>
             <button type="submit" className="btn btn-primary">Guardar Cliente</button>
@@ -337,7 +364,7 @@ export default function Clientes() {
                   <td><strong>{c.apellido?.toUpperCase()}</strong></td>
                   <td>{c.nombre}</td>
                   <td className="col-direccion">{c.direccion}</td>
-                  <td className="col-telefono">{c.telefono}</td>
+                  <td className="col-telefono">{c.telefonoPrincipal || c.telefono?.split(' / ')[0] || ''}{c.telefonoSecundario ? ` / ${c.telefonoSecundario}` : c.telefono?.includes(' / ') ? ` / ${c.telefono.split(' / ')[1]}` : ''}</td>
                   <td>
                     <button onClick={() => seleccionarCliente(c)} className="btn btn-small btn-secondary">📋</button>
                     <button onClick={() => abrirEditar(c)} className="btn btn-small btn-secondary" style={{ marginLeft: 4 }}>✏️</button>
@@ -352,7 +379,7 @@ export default function Clientes() {
       )}
 
       {showHistorial && selected && (
-        <div className="card">
+        <div className="card" id="historial-cliente">
           <h3>Historial de {selected.apellido?.toUpperCase()}, {selected.nombre}</h3>
           <Link to={`/nuevo-alquiler?clienteId=${selected.id}`} className="btn btn-primary btn-small" style={{ textDecoration: 'none', marginBottom: 12, display: 'inline-block' }}>➕ Nuevo Alquiler</Link>
           {historial.length === 0 ? (
@@ -390,7 +417,7 @@ export default function Clientes() {
               <div className="card" style={{ marginTop: 16 }} id="detalle-alquiler-cliente">
                 <h4>Detalle del Alquiler</h4>
                 <p><strong>Dirección:</strong> {detalleAlquiler.clienteDireccion || '-'}</p>
-                {detalleAlquiler.clienteTelefono && <p><strong>Teléfono:</strong> 📞 <a href={`tel:${detalleAlquiler.clienteTelefono}`} style={{ textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>{detalleAlquiler.clienteTelefono}</a></p>}
+                {(detalleAlquiler.clienteTelefonoPrincipal || detalleAlquiler.clienteTelefono) && <p><strong>Teléfono:</strong> 📞 <a href={`tel:${(detalleAlquiler.clienteTelefonoPrincipal || detalleAlquiler.clienteTelefono).split('/')[0].trim()}`} style={{ textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>{detalleAlquiler.clienteTelefonoPrincipal || detalleAlquiler.clienteTelefono?.split(' / ')[0] || ''}{detalleAlquiler.clienteTelefonoSecundario ? ` / ${detalleAlquiler.clienteTelefonoSecundario}` : detalleAlquiler.clienteTelefono?.includes(' / ') ? ` / ${detalleAlquiler.clienteTelefono.split(' / ')[1]}` : ''}</a></p>}
                 <p><strong>Fecha:</strong> {detalleAlquiler.fechaAlquiler} {detalleAlquiler.turno ? `| Turno: ${detalleAlquiler.turno}` : ''} {detalleAlquiler.colegio ? `| Colegio: ${detalleAlquiler.colegio}` : ''}</p>
                 {detalleAlquiler.fechaEvento && <p><strong>Evento:</strong> {detalleAlquiler.fechaEvento}</p>}
                 {detalleAlquiler.fechaDevolucion && <p><strong>Devolución:</strong> {detalleAlquiler.fechaDevolucion}</p>}
@@ -398,7 +425,7 @@ export default function Clientes() {
                 {(detalleAlquiler.items || []).map((it, idx) => (
                   <div key={idx} className="detalle-item">
                     {it.fotoUrl && !esDriveUrl(it.fotoUrl) ? (
-                      <img src={it.fotoUrl} alt={it.nombre} className="thumb" />
+                      <img src={it.fotoUrl} alt={it.nombre} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(it.fotoUrl)} />
                     ) : null}
                     {it.fotoUrl && esDriveUrl(it.fotoUrl) ? (
                       <a href={it.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
@@ -449,8 +476,12 @@ export default function Clientes() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Teléfono</label>
-                <input value={editForm.telefono} onChange={(e) => setEditForm({ ...editForm, telefono: e.target.value })} />
+                <label>Celular principal</label>
+                <input value={editForm.telefonoPrincipal} onChange={(e) => setEditForm({ ...editForm, telefonoPrincipal: e.target.value })} placeholder="381..." />
+              </div>
+              <div className="form-group">
+                <label>Celular secundario</label>
+                <input value={editForm.telefonoSecundario} onChange={(e) => setEditForm({ ...editForm, telefonoSecundario: e.target.value })} placeholder="Opcional" />
               </div>
             </div>
           </div>
@@ -468,8 +499,12 @@ export default function Clientes() {
 
             <div className="form-row" style={{ marginBottom: 8 }}>
               <div className="form-group">
-                <label>Teléfono</label>
-                <input value={editFormAlquiler.telefono} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, telefono: e.target.value })} placeholder="Ej: 11 1234-5678" type="tel" />
+                <label>Celular principal</label>
+                <input value={editFormAlquiler.telefonoPrincipal} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, telefonoPrincipal: e.target.value })} placeholder="381..." type="tel" />
+              </div>
+              <div className="form-group">
+                <label>Celular secundario</label>
+                <input value={editFormAlquiler.telefonoSecundario} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, telefonoSecundario: e.target.value })} placeholder="Opcional" type="tel" />
               </div>
               <div className="form-group">
                 <label>Estado</label>
@@ -521,7 +556,7 @@ export default function Clientes() {
                       copy[i] = handleEditFotoUrl(copy[i], e.target.value);
                       setEditFormAlquiler({ ...editFormAlquiler, items: copy });
                     }} placeholder="O pegar URL de imagen..." className="url-input" />
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" />}
+                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
                     {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
                       <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
                         <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
@@ -600,6 +635,7 @@ export default function Clientes() {
       {resultados.length === 0 && search && (
         <div className="card"><p className="text-muted">No se encontraron clientes con ese apellido.</p></div>
       )}
+      <FotoModal src={fotoAmpliada} onClose={() => setFotoAmpliada(null)} />
     </div>
   );
 }

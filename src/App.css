@@ -330,3 +330,21 @@ a { color: var(--primary); }
   .card { padding: 16px; overflow-x: hidden; }
   .stat-card { padding: 14px 10px; }
 }
+
+/* Sueldos */
+.sueldos { max-width: 100%; }
+.sueldos h2 { margin-bottom: 20px; }
+.sueldos-hora-form { margin-bottom: 12px; }
+.sueldos-resumen { max-width: 500px; }
+.resumen-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 0.95rem;
+  border-bottom: 1px solid var(--border);
+}
+.resumen-item.total-row { font-weight: 600; color: var(--primary); }
+.resumen-item.grand-total { font-weight: 700; font-size: 1.05rem; color: var(--text); padding: 12px 0; }
+.resumen-item.warn-total { color: var(--danger); font-weight: 600; }
+.resumen-item hr { margin: 12px 0; }
+

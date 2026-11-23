@@ -42,8 +42,8 @@ export default function NuevoAlquiler() {
   const [fechaDevolucion, setFechaDevolucion] = useState('');
   const [turno, setTurno] = useState('mañana');
   const [colegio, setColegio] = useState('');
-  const [precio, setPrecio] = useState('');
-  const [seña, setSeña] = useState('');
+  const [precio, setPrecio] = useState('17000');
+  const [seña, setSeña] = useState('0');
   const [garantia, setGarantia] = useState('');
   const [garantiaDevuelta, setGarantiaDevuelta] = useState(false);
   const [nota, setNota] = useState('');
@@ -52,31 +52,10 @@ export default function NuevoAlquiler() {
   const [exito, setExito] = useState('');
   const [error, setError] = useState('');
   const [ultimoAlquiler, setUltimoAlquiler] = useState(null);
+  const [whatsAppPrompt, setWhatsAppPrompt] = useState(null);
   const [historial, setHistorial] = useState([]);
-  const [disponibles, setDisponibles] = useState([]);
-  const [customNombre, setCustomNombre] = useState('');
   const [sortField, setSortField] = useState('apellido');
   const [sortDir, setSortDir] = useState('asc');
-  const [filtroDisponibles, setFiltroDisponibles] = useState('');
-  const [customFoto, setCustomFoto] = useState(null);
-  const [customFotoPreview, setCustomFotoPreview] = useState('');
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, 'alquileres'));
-        const nombres = new Set();
-        snap.docs.forEach((d) => {
-          (d.data().items || []).forEach((i) => {
-            if (i.nombre) nombres.add(i.nombre);
-          });
-        });
-        setDisponibles(Array.from(nombres).sort());
-      } catch (err) {
-        console.error('Error al cargar disfraces:', err);
-      }
-    })();
-  }, []);
 
   const [params] = useSearchParams();
   useEffect(() => {
@@ -136,34 +115,6 @@ export default function NuevoAlquiler() {
 
   const agregarItem = (nombre = '') => {
     setItems([...items, { nombre, talle: '', file: null, preview: '', fotoUrl: '' }]);
-  };
-
-  const agregarCustom = () => {
-    if (!customNombre.trim()) return;
-    const preview = customFotoPreview || '';
-    const file = customFoto || null;
-    const idx = items.findIndex((i) => !i.nombre);
-    if (idx >= 0) {
-      const copy = [...items];
-      copy[idx] = { ...copy[idx], nombre: customNombre.trim(), file, preview, fotoUrl: preview };
-      setItems(copy);
-    } else {
-      setItems([...items, { nombre: customNombre.trim(), talle: '', file, preview, fotoUrl: preview }]);
-    }
-    setCustomNombre('');
-    setCustomFoto(null);
-    setCustomFotoPreview('');
-  };
-
-  const seleccionarDisfraz = (nombre) => {
-    const idx = items.findIndex((i) => !i.nombre);
-    if (idx >= 0) {
-      const copy = [...items];
-      copy[idx] = { ...copy[idx], nombre };
-      setItems(copy);
-    } else {
-      setItems([...items, { nombre, talle: '', file: null, preview: '', fotoUrl: '' }]);
-    }
   };
 
   const updateItem = (i, field, val) => {
@@ -231,7 +182,9 @@ export default function NuevoAlquiler() {
         clienteNombre: `${cliente.apellido?.toUpperCase()}, ${cliente.nombre}`,
         clienteApellido: cliente.apellido?.toUpperCase(),
         clienteDireccion: cliente.direccion,
-        clienteTelefono: cliente.telefono || '',
+        clienteTelefono: cliente.telefono || cliente.telefonoPrincipal + (cliente.telefonoSecundario ? ' / ' + cliente.telefonoSecundario : '') || '',
+        clienteTelefonoPrincipal: cliente.telefonoPrincipal || '',
+        clienteTelefonoSecundario: cliente.telefonoSecundario || '',
         items: itemsConFotos,
         fechaAlquiler,
         fechaEvento,
@@ -248,9 +201,11 @@ export default function NuevoAlquiler() {
       });
 
       setExito('¡Alquiler registrado con éxito!');
-      setUltimoAlquiler({
+      const telPrincipal = (cliente?.telefonoPrincipal || (cliente?.telefono || '').split(' / ')[0] || '').trim();
+      const datosGuardados = {
         clienteNombre: cliente ? `${cliente.apellido?.toUpperCase()}, ${cliente.nombre}` : 'Sin cliente',
-        clienteTelefono: cliente?.telefono || '',
+        clienteTelefono: cliente?.telefono || telPrincipal,
+        clienteTelefonoPrincipal: telPrincipal,
         items: itemsValidos.map((i) => i.nombre).join(', '),
         fechaAlquiler,
         fechaEvento,
@@ -260,10 +215,19 @@ export default function NuevoAlquiler() {
         precio,
         seña,
         garantia,
-      });
+      };
+      setUltimoAlquiler(datosGuardados);
+      const waUrl = getWhatsAppReceiptUrl(datosGuardados);
+      if (waUrl && telPrincipal) {
+        setWhatsAppPrompt({
+          url: waUrl,
+          telefono: telPrincipal,
+          nombre: datosGuardados.clienteNombre,
+        });
+      }
       setStep(1); setCliente(null); setItems([{ nombre: '', talle: '', file: null, preview: '', fotoUrl: '' }]);
       setFechaAlquiler(''); setFechaEvento(''); setFechaDevolucion(''); setTurno('mañana'); setColegio('');
-      setPrecio(''); setSeña(''); setGarantia(''); setGarantiaDevuelta(false); setNota(''); setEstado('pendiente');
+      setPrecio('17000'); setSeña('0'); setGarantia(''); setGarantiaDevuelta(false); setNota(''); setEstado('pendiente');
       setSearchApe(''); setClientes([]); setBusco(false);
       setTimeout(() => setExito(''), 4000);
     } catch (err) {
@@ -327,21 +291,17 @@ export default function NuevoAlquiler() {
             <button onClick={buscarClientes} className="btn btn-primary">Buscar</button>
           </div>
 
-          {ordenados.length > 0 && (
+          {busco && ordenados.length > 0 && (
             <div className="table-wrapper">
             <table className="table">
-              <thead><tr>
-                <th className="sortable" onClick={() => handleSort('apellido')}>Apellido{sortIcon('apellido')}</th>
-                <th className="sortable" onClick={() => handleSort('nombre')}>Nombre{sortIcon('nombre')}</th>
-                <th>Dirección</th><th>Teléfono</th><th></th>
-              </tr></thead>
+              <thead><tr><th>Apellido</th><th>Nombre</th><th>Dirección</th><th>Teléfono</th><th></th></tr></thead>
               <tbody>
-                  {ordenados.map((c) => (
+                {ordenados.map((c) => (
                   <tr key={c.id} className="clickable" onDoubleClick={() => selectCliente(c)}>
                     <td><strong>{c.apellido?.toUpperCase()}</strong></td>
                     <td>{c.nombre}</td>
                     <td>{c.direccion}</td>
-                    <td>{c.telefono}</td>
+                    <td>{c.telefonoPrincipal || c.telefono?.split(' / ')[0] || ''}{c.telefonoSecundario ? ` / ${c.telefonoSecundario}` : c.telefono?.includes(' / ') ? ` / ${c.telefono.split(' / ')[1]}` : ''}</td>
                     <td><button onClick={() => selectCliente(c)} className="btn btn-small btn-primary">Seleccionar</button></td>
                   </tr>
                 ))}
@@ -350,9 +310,9 @@ export default function NuevoAlquiler() {
             </div>
           )}
 
-          {ordenados.length === 0 && busco && (
+          {busco && (
             <div className="card" style={{ marginTop: 12 }}>
-              <h4>Cliente no encontrado — Crear nuevo</h4>
+              <h4>{ordenados.length === 0 ? 'Cliente no encontrado — Crear nuevo' : '¿No es el que buscabas? Crear nuevo cliente'}</h4>
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 const form = e.target;
@@ -362,12 +322,14 @@ export default function NuevoAlquiler() {
                 const ref = await addDoc(collection(db, 'clientes'), {
                   nombre, apellido,
                   direccion: form.direccion.value.trim(),
-                  telefono: form.telefono.value.trim(),
+                  telefonoPrincipal: form.telefonoPrincipal.value.trim(),
+                  telefonoSecundario: form.telefonoSecundario.value.trim(),
+                  telefono: form.telefonoPrincipal.value.trim() + (form.telefonoSecundario.value.trim() ? ' / ' + form.telefonoSecundario.value.trim() : ''),
                   apellidoSearch: apellido.toLowerCase(),
                   nombreSearch: nombre.toLowerCase(),
                   createdAt: serverTimestamp()
                 });
-                const nuevoCliente = { id: ref.id, nombre, apellido, direccion: form.direccion.value.trim(), telefono: form.telefono.value.trim() };
+                const nuevoCliente = { id: ref.id, nombre, apellido, direccion: form.direccion.value.trim(), telefonoPrincipal: form.telefonoPrincipal.value.trim(), telefonoSecundario: form.telefonoSecundario.value.trim() };
                 selectCliente(nuevoCliente);
               }}>
                 <div className="form-row">
@@ -375,9 +337,10 @@ export default function NuevoAlquiler() {
                   <div className="form-group"><label>Apellido</label><input name="apellido" required defaultValue={searchApe} /></div>
                 </div>
                 <div className="form-row">
-                  <div className="form-group"><label>Dirección</label><input name="direccion" /></div>
-                  <div className="form-group"><label>Teléfono</label><input name="telefono" type="tel" /></div>
-                </div>
+                <div className="form-group"><label>Dirección</label><input name="direccion" /></div>
+                <div className="form-group"><label>Celular principal</label><input name="telefonoPrincipal" type="tel" placeholder="381..." /></div>
+              </div>
+              <div className="form-group"><label>Celular secundario</label><input name="telefonoSecundario" type="tel" placeholder="Opcional" /></div>
                 <button type="submit" className="btn btn-primary">Crear y Seleccionar</button>
               </form>
             </div>
@@ -394,7 +357,7 @@ export default function NuevoAlquiler() {
           {cliente && (
             <>
             <div className="selected-client">
-              <strong>Cliente:</strong> {cliente.apellido?.toUpperCase()}, {cliente.nombre} &mdash; {cliente.direccion}
+              <strong>Cliente:</strong> {cliente.apellido?.toUpperCase()}, {cliente.nombre} &mdash; {cliente.direccion} &mdash; 📞 {cliente.telefonoPrincipal || cliente.telefono?.split(' / ')[0] || ''}{cliente.telefonoSecundario ? ` / ${cliente.telefonoSecundario}` : cliente.telefono?.includes(' / ') ? ` / ${cliente.telefono.split(' / ')[1]}` : ''}
             </div>
 
             {historial.length > 0 && (
@@ -421,99 +384,45 @@ export default function NuevoAlquiler() {
             </>
           )}
 
-          <form onSubmit={(e) => { e.preventDefault(); setStep(3); }}>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const sinFoto = items.some((it) => it.nombre.trim() && !it.fotoUrl);
+            if (sinFoto && !window.confirm('Hay items sin foto. ¿Continuar igual?')) return;
+            setStep(3);
+          }}>
             <h3>Items del Alquiler</h3>
 
-            <div className="dual-panel">
-              <div className="panel panel-left">
-                <h4>Disfraces Disponibles</h4>
-                <input
-                  value={filtroDisponibles}
-                  onChange={(e) => setFiltroDisponibles(e.target.value)}
-                  placeholder="Buscar disfraz..."
-                  className="search-inside"
-                />
-                <div className="available-list">
-                  {disponibles.filter((n) => !filtroDisponibles || n.toLowerCase().includes(filtroDisponibles.toLowerCase())).map((nombre) => (
-                    <div key={nombre} className="available-item" onClick={() => seleccionarDisfraz(nombre)}>
-                      <span>{nombre}</span>
-                      <span className="add-icon">+</span>
+            {items.map((item, i) => (
+              <div key={i} className="selected-item" style={{ marginBottom: 12 }}>
+                <div className="selected-item-header">
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label>Nombre del disfraz</label>
+                    <input value={item.nombre} onChange={(e) => updateItem(i, 'nombre', e.target.value)} placeholder="Ej: Batman, Princesa..." />
+                  </div>
+                  {items.length > 1 && <button type="button" onClick={() => removeItem(i)} className="btn btn-danger btn-small" style={{ marginTop: 22 }}>✕</button>}
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Talle</label>
+                    <input value={item.talle} onChange={(e) => updateItem(i, 'talle', e.target.value)} placeholder="Ej: T8, M..." />
+                  </div>
+                  <div className="form-group">
+                    <label>Foto</label>
+                    <div className="foto-inputs" onPaste={(e) => handlePaste(i, e)}>
+                      <label className="btn-foto">
+                        📷 {item.fotoUrl ? 'Cambiar foto' : 'Tomar foto'}
+                        <input type="file" accept="image/*" capture="environment" onChange={(e) => handleFile(i, e.target.files[0])} />
+                      </label>
+                      <span className="paste-hint">o Ctrl+V</span>
+                      <input value={item.fotoUrl} onChange={(e) => handleFotoUrl(i, e.target.value)} placeholder="O pegar URL..." className="url-input" />
                     </div>
-                  ))}
-                  {disponibles.filter((n) => !filtroDisponibles || n.toLowerCase().includes(filtroDisponibles.toLowerCase())).length === 0 && disponibles.length > 0 && <p className="text-muted">Sin resultados</p>}
-                  {disponibles.length === 0 && <p className="text-muted">Cargando...</p>}
-                </div>
-                <div className="custom-add" style={{ flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      value={customNombre}
-                      onChange={(e) => setCustomNombre(e.target.value)}
-                      placeholder="Escribí un nombre personalizado..."
-                      onKeyDown={(e) => { if (e.key === 'Enter' && customNombre.trim()) { agregarCustom(); } }}
-                      style={{ flex: 1 }}
-                    />
-                    <button type="button" className="btn btn-small btn-primary" onClick={agregarCustom}>
-                      Agregar
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <label className="btn-foto" style={{ padding: '6px 12px', fontSize: 12 }}>
-                      📷 Foto
-                      <input type="file" accept="image/*" capture="environment" onChange={(e) => {
-                        if (e.target.files[0]) {
-                          setCustomFoto(e.target.files[0]);
-                          const reader = new FileReader();
-                          reader.onload = (ev) => setCustomFotoPreview(ev.target.result);
-                          reader.readAsDataURL(e.target.files[0]);
-                        }
-                      }} />
-                    </label>
-                    {customFotoPreview && <>
-                      <img src={customFotoPreview} alt="preview" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
-                      <button type="button" className="btn btn-small btn-danger" onClick={() => { setCustomFoto(null); setCustomFotoPreview(''); }}>✕</button>
-                    </>}
+                    {item.preview && <img src={item.preview} alt="preview" className="thumb" />}
                   </div>
                 </div>
-                <button type="button" className="btn btn-secondary btn-full" style={{ marginTop: 8 }} onClick={() => agregarItem('')}>
-                  + Agregar otro item
-                </button>
               </div>
+            ))}
 
-              <div className="panel panel-right">
-                <h4>Items Seleccionados</h4>
-                {items.length === 0 && <p className="text-muted">No hay items. Tocá un disfraz de la lista.</p>}
-                {items.map((item, i) => (
-                  <div key={i} className="selected-item">
-                    <div className="selected-item-header">
-                      <strong>{item.nombre || 'Item ' + (i + 1)}</strong>
-                      {item.nombre && <button type="button" onClick={() => removeItem(i)} className="btn btn-danger btn-small">✕</button>}
-                    </div>
-                    {item.nombre ? (
-                    <div className="selected-item-fields">
-                      <div className="form-group">
-                        <label>Talle</label>
-                        <input value={item.talle} onChange={(e) => updateItem(i, 'talle', e.target.value)} placeholder="Ej: T8, M..." />
-                      </div>
-                      <div className="form-group">
-                        <label>Foto</label>
-                        <div className="foto-inputs" onPaste={(e) => handlePaste(i, e)}>
-                          <label className="btn-foto">
-                            📷 {item.fotoUrl ? 'Cambiar foto' : 'Tomar foto'}
-                            <input type="file" accept="image/*" capture="environment" onChange={(e) => handleFile(i, e.target.files[0])} />
-                          </label>
-                          <span className="paste-hint">o Ctrl+V para pegar</span>
-                          <input value={item.fotoUrl} onChange={(e) => handleFotoUrl(i, e.target.value)} placeholder="O pegar URL de imagen..." className="url-input" />
-                        </div>
-                        {item.preview && <img src={item.preview} alt="preview" className="thumb" />}
-                      </div>
-                    </div>
-                    ) : (
-                      <p className="text-muted" style={{ fontSize: 13, margin: 0 }}>Tocá un disfraz de la lista para asignarlo</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <button type="button" onClick={() => agregarItem('')} className="btn btn-secondary" style={{ marginBottom: 16 }}>+ Agregar item</button>
 
             <hr />
 
@@ -590,7 +499,7 @@ export default function NuevoAlquiler() {
         <div className="card">
           <h3>Confirmar Alquiler</h3>
           {cliente && (
-            <p><strong>Cliente:</strong> {cliente.apellido?.toUpperCase()}, {cliente.nombre} - {cliente.direccion}</p>
+            <p><strong>Cliente:</strong> {cliente.apellido?.toUpperCase()}, {cliente.nombre} - {cliente.direccion} - 📞 {cliente.telefonoPrincipal || cliente.telefono?.split(' / ')[0] || ''}{cliente.telefonoSecundario ? ` / ${cliente.telefonoSecundario}` : cliente.telefono?.includes(' / ') ? ` / ${cliente.telefono.split(' / ')[1]}` : ''}</p>
           )}
           <p><strong>Fecha Alquiler:</strong> {fechaAlquiler}{fechaEvento ? ` | Evento: ${fechaEvento}` : ''}{fechaDevolucion ? ` | Devolución: ${fechaDevolucion}` : ''} | <strong>Turno:</strong> {turno}</p>
           {colegio && <p><strong>Colegio:</strong> {colegio}</p>}
@@ -606,6 +515,21 @@ export default function NuevoAlquiler() {
             <button onClick={handleSubmit} className="btn btn-primary" disabled={subiendo}>
               {subiendo ? 'Guardando...' : 'Confirmar y Guardar'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {whatsAppPrompt && (
+        <div className="modal-overlay" onClick={() => setWhatsAppPrompt(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <h3>Alquiler guardado ✅</h3>
+            <p>El alquiler se registró con éxito.</p>
+            <p><strong>¿Enviar el comprobante por WhatsApp?</strong></p>
+            <p className="text-muted">{whatsAppPrompt.nombre} — 📞 {whatsAppPrompt.telefono}</p>
+            <div className="flex gap" style={{ marginTop: 16, flexWrap: 'wrap' }}>
+              <a href={whatsAppPrompt.url} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ textDecoration: 'none' }}>📤 Enviar por WhatsApp</a>
+              <button onClick={() => setWhatsAppPrompt(null)} className="btn btn-secondary">Ahora no</button>
+            </div>
           </div>
         </div>
       )}

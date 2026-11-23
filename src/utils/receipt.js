@@ -1,5 +1,5 @@
 export function getWhatsAppReceiptUrl(alquiler) {
-  if (!alquiler?.clienteTelefono) return null;
+  if (!alquiler?.clienteTelefono && !alquiler?.clienteTelefonoPrincipal) return null;
   const saldo = (Number(alquiler.precio) || 0) - (Number(alquiler.seña) || 0);
   const txt = `🎭 *MUNDO DISFRAZ - Comprobante*\n\n` +
     `Cliente: ${alquiler.clienteNombre}\n` +
@@ -20,12 +20,12 @@ export function getWhatsAppReceiptUrl(alquiler) {
     `*Garantía solo en Efectivo*\n\n` +
     `MUNDO DISFRAZ\n` +
     `Avda Perón 2550 - Tel: 3814143161`;
-  const tel = alquiler.clienteTelefono.split('/')[0].replace(/[^0-9]/g, '');
+  const tel = (alquiler.clienteTelefonoPrincipal || alquiler.clienteTelefono || '').split('/')[0].replace(/[^0-9]/g, '');
   return `https://wa.me/54${tel}?text=${encodeURIComponent(txt)}`;
 }
 
 export function getWhatsAppReminderUrl(alquiler) {
-  if (!alquiler?.clienteTelefono) return null;
+  if (!alquiler?.clienteTelefono && !alquiler?.clienteTelefonoPrincipal) return null;
   if (!alquiler.fechaDevolucion) return null;
   if (alquiler.estado !== 'entregado' && alquiler.estado !== 'retirado') return null;
   const hoy = new Date();
@@ -38,6 +38,6 @@ export function getWhatsAppReminderUrl(alquiler) {
     `Cliente: ${alquiler.clienteNombre}\n` +
     `Items: ${Array.isArray(alquiler.items) ? alquiler.items.map(i => i.nombre || i).join(', ') : alquiler.items}\n` +
     `Devolución: ${alquiler.fechaDevolucion}`;
-  const tel = alquiler.clienteTelefono.split('/')[0].replace(/[^0-9]/g, '');
+  const tel = (alquiler.clienteTelefonoPrincipal || alquiler.clienteTelefono || '').split('/')[0].replace(/[^0-9]/g, '');
   return `https://wa.me/54${tel}?text=${encodeURIComponent(txt)}`;
 }

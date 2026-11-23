@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { collection, query, orderBy, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import FotoModal from './FotoModal';
 
 function esDriveUrl(url) {
   return url && url.includes('drive.google.com');
@@ -50,6 +52,7 @@ export default function Alquileres() {
   const [searchCliente, setSearchCliente] = useState('');
   const [editando, setEditando] = useState(null);
   const [editForm, setEditForm] = useState({});
+  const [fotoAmpliada, setFotoAmpliada] = useState(null);
 
   const cargar = async () => {
     const q = query(collection(db, 'alquileres'), orderBy('createdAt', 'desc'));
@@ -59,8 +62,14 @@ export default function Alquileres() {
 
   useEffect(() => { cargar(); }, []);
 
-  const cambiarEstado = async (id, nuevoEstado) => {
-    await updateDoc(doc(db, 'alquileres', id), { estado: nuevoEstado });
+  useEffect(() => { setTimeout(initTopScrollbar, 300); }, [alquileres]);
+
+  const cambiarEstado = async (id, nuevoEstado, alquiler) => {
+    const data = { estado: nuevoEstado };
+    if (nuevoEstado === 'devuelto' && alquiler?.garantia && !alquiler.garantiaDevuelta) {
+      data.garantiaDevuelta = true;
+    }
+    await updateDoc(doc(db, 'alquileres', id), data);
     cargar();
   };
 
@@ -73,6 +82,7 @@ export default function Alquileres() {
 
   const abrirEditar = (a) => {
     setEditando(a.id);
+    const partes = (a.clienteTelefono || '').split(' / ');
     setEditForm({
       items: (a.items || []).map((i) => ({ ...i, file: null, preview: '' })),
       fechaAlquiler: a.fechaAlquiler || '',
@@ -80,7 +90,8 @@ export default function Alquileres() {
       fechaDevolucion: a.fechaDevolucion || '',
       turno: a.turno || 'mañana',
       colegio: a.colegio || '',
-      telefono: a.clienteTelefono || '',
+      telefonoPrincipal: a.clienteTelefonoPrincipal || partes[0] || '',
+      telefonoSecundario: a.clienteTelefonoSecundario || partes[1] || '',
       precio: a.precio || '',
       seña: a.seña || '',
       garantia: a.garantia || '',
@@ -101,9 +112,12 @@ export default function Alquileres() {
           itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
         }
       }
-      await updateDoc(doc(db, 'alquileres', id), {
+      const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
+      const data = {
         items: itemsConFotos,
-        clienteTelefono: editForm.telefono,
+        clienteTelefono: telCombined,
+        clienteTelefonoPrincipal: editForm.telefonoPrincipal,
+        clienteTelefonoSecundario: editForm.telefonoSecundario,
         fechaAlquiler: editForm.fechaAlquiler,
         fechaEvento: editForm.fechaEvento,
         fechaDevolucion: editForm.fechaDevolucion,
@@ -115,7 +129,11 @@ export default function Alquileres() {
         garantiaDevuelta: editForm.garantiaDevuelta,
         nota: editForm.nota,
         estado: editForm.estado,
-      });
+      };
+      if (editForm.estado === 'devuelto' && editForm.garantia && !editForm.garantiaDevuelta) {
+        data.garantiaDevuelta = true;
+      }
+      await updateDoc(doc(db, 'alquileres', id), data);
       setEditando(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
@@ -220,7 +238,7 @@ export default function Alquileres() {
               <td>{a.fechaAlquiler}{a.turno ? ` (${a.turno})` : ''}</td>
               <td className="col-colegio">{a.colegio || '-'}</td>
               <td style={{ whiteSpace: 'nowrap' }}>
-                {a.clienteTelefono ? <span style={{ fontSize: '0.85rem' }}>📞 {a.clienteTelefono}</span> : null}
+                {(a.clienteTelefonoPrincipal || a.clienteTelefono) ? <span style={{ fontSize: '0.85rem' }}>📞 {a.clienteTelefonoPrincipal || a.clienteTelefono?.split(' / ')[0] || ''}{a.clienteTelefonoSecundario ? ` / ${a.clienteTelefonoSecundario}` : a.clienteTelefono?.includes(' / ') ? ` / ${a.clienteTelefono.split(' / ')[1]}` : ''}</span> : null}
                 <button className="btn-link" onClick={() => {
                   setDetalle(detalle?.id === a.id ? null : a);
                   setTimeout(() => {
@@ -241,7 +259,7 @@ export default function Alquileres() {
                   value={a.estado}
                   onChange={(e) => {
                     const nuevoEstado = e.target.value;
-                    cambiarEstado(a.id, nuevoEstado);
+                    cambiarEstado(a.id, nuevoEstado, a);
                     if (detalle?.id === a.id) setDetalle({ ...detalle, estado: nuevoEstado });
                   }}
                   className="estado-select"
@@ -273,7 +291,7 @@ export default function Alquileres() {
             <div className="flex gap" style={{ alignItems: 'center' }}>
               <select value={detalle.estado} onChange={(e) => {
                 const nuevoEstado = e.target.value;
-                cambiarEstado(detalle.id, nuevoEstado);
+                cambiarEstado(detalle.id, nuevoEstado, detalle);
                 setDetalle({ ...detalle, estado: nuevoEstado });
               }} className="estado-select" style={{ padding: '8px 12px', fontSize: '0.9rem' }}>
                 <option value="pendiente">Pendiente</option>
@@ -288,7 +306,7 @@ export default function Alquileres() {
             </div>
           </div>
           <p><strong>Dirección:</strong> {detalle.clienteDireccion}</p>
-          {detalle.clienteTelefono && <p><strong>Teléfono:</strong> 📞 <a href={`tel:${detalle.clienteTelefono.split('/')[0].trim()}`} style={{ textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>{detalle.clienteTelefono}</a></p>}
+          {(detalle.clienteTelefonoPrincipal || detalle.clienteTelefono) && <p><strong>Teléfono:</strong> 📞 <a href={`tel:${(detalle.clienteTelefonoPrincipal || detalle.clienteTelefono || '').split('/')[0].trim()}`} style={{ textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>{detalle.clienteTelefonoPrincipal || detalle.clienteTelefono?.split(' / ')[0] || ''}{detalle.clienteTelefonoSecundario ? ` / ${detalle.clienteTelefonoSecundario}` : detalle.clienteTelefono?.includes(' / ') ? ` / ${detalle.clienteTelefono.split(' / ')[1]}` : ''}</a></p>}
           <p><strong>Fecha:</strong> {detalle.fechaAlquiler} {detalle.turno ? `| Turno: ${detalle.turno}` : ''} {detalle.colegio ? `| Colegio: ${detalle.colegio}` : ''}</p>
           {detalle.fechaEvento && <p><strong>Evento:</strong> {detalle.fechaEvento}</p>}
           {detalle.fechaDevolucion && <p><strong>Devolución:</strong> {detalle.fechaDevolucion}</p>}
@@ -296,7 +314,7 @@ export default function Alquileres() {
           <h4 style={{ marginTop: 12, marginBottom: 8 }}>Items</h4>
           {detalle.items?.map((it, i) => (
             <div key={i} className="detalle-item">
-              {it.fotoUrl && !esDriveUrl(it.fotoUrl) && <img src={it.fotoUrl} alt={it.nombre} className="thumb" />}
+              {it.fotoUrl && !esDriveUrl(it.fotoUrl) && <img src={it.fotoUrl} alt={it.nombre} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(it.fotoUrl)} />}
               {it.fotoUrl && esDriveUrl(it.fotoUrl) && (
                 <a href={it.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
                   <img src={getDriveImageUrl(it.fotoUrl)} alt={it.nombre} className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; }} />
@@ -311,6 +329,8 @@ export default function Alquileres() {
         </div>
       )}
 
+      <FotoModal src={fotoAmpliada} onClose={() => setFotoAmpliada(null)} />
+
       {editando && (
         <div className="modal-overlay" onClick={() => setEditando(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -322,9 +342,15 @@ export default function Alquileres() {
 
             <div className="form-row" style={{ marginBottom: 8 }}>
               <div className="form-group">
-                <label>Teléfono</label>
-                <input value={editForm.telefono} onChange={(e) => setEditForm({ ...editForm, telefono: e.target.value })} placeholder="Ej: 11 1234-5678" type="tel" />
+                <label>Celular principal</label>
+                <input value={editForm.telefonoPrincipal} onChange={(e) => setEditForm({ ...editForm, telefonoPrincipal: e.target.value })} placeholder="381..." type="tel" />
               </div>
+              <div className="form-group">
+                <label>Celular secundario</label>
+                <input value={editForm.telefonoSecundario} onChange={(e) => setEditForm({ ...editForm, telefonoSecundario: e.target.value })} placeholder="Opcional" type="tel" />
+              </div>
+            </div>
+            <div className="form-row" style={{ marginBottom: 8 }}>
               <div className="form-group">
                 <label>Estado</label>
                 <select value={editForm.estado} onChange={(e) => setEditForm({ ...editForm, estado: e.target.value })}>
@@ -373,7 +399,7 @@ export default function Alquileres() {
                         }
                       }} />
                     </label>
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" />}
+                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
                     {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
                       <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
                         <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />

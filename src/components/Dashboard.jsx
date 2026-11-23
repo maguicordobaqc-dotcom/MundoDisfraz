@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { collection, getDocs, query, orderBy, limit, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import FotoModal from './FotoModal';
 import { Link } from 'react-router-dom';
 
 function esDriveUrl(url) {
@@ -46,6 +48,7 @@ export default function Dashboard() {
   const [editForm, setEditForm] = useState({});
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const [fotoAmpliada, setFotoAmpliada] = useState(null);
 
 
   const cargar = async () => {
@@ -65,6 +68,8 @@ export default function Dashboard() {
 
   useEffect(() => { cargar(); }, []);
 
+  useEffect(() => { setTimeout(initTopScrollbar, 300); }, [recientes]);
+
   const cambiarEstado = async (id, nuevoEstado) => {
     await updateDoc(doc(db, 'alquileres', id), { estado: nuevoEstado });
     cargar();
@@ -72,6 +77,7 @@ export default function Dashboard() {
 
   const abrirEditar = (a) => {
     setEditando(a.id);
+    const partes = (a.clienteTelefono || '').split(' / ');
     setEditForm({
       items: (a.items || []).map((i) => ({ ...i, file: null, preview: '' })),
       fechaAlquiler: a.fechaAlquiler || '',
@@ -79,7 +85,8 @@ export default function Dashboard() {
       fechaDevolucion: a.fechaDevolucion || '',
       turno: a.turno || 'mañana',
       colegio: a.colegio || '',
-      telefono: a.clienteTelefono || '',
+      telefonoPrincipal: a.clienteTelefonoPrincipal || partes[0] || '',
+      telefonoSecundario: a.clienteTelefonoSecundario || partes[1] || '',
       precio: a.precio || '',
       seña: a.seña || '',
       garantia: a.garantia || '',
@@ -100,9 +107,12 @@ export default function Dashboard() {
           itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
         }
       }
-      await updateDoc(doc(db, 'alquileres', id), {
+      const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
+      const data = {
         items: itemsConFotos,
-        clienteTelefono: editForm.telefono,
+        clienteTelefono: telCombined,
+        clienteTelefonoPrincipal: editForm.telefonoPrincipal,
+        clienteTelefonoSecundario: editForm.telefonoSecundario,
         fechaAlquiler: editForm.fechaAlquiler,
         fechaEvento: editForm.fechaEvento,
         fechaDevolucion: editForm.fechaDevolucion,
@@ -114,7 +124,11 @@ export default function Dashboard() {
         garantiaDevuelta: editForm.garantiaDevuelta,
         nota: editForm.nota,
         estado: editForm.estado,
-      });
+      };
+      if (editForm.estado === 'devuelto' && editForm.garantia && !editForm.garantiaDevuelta) {
+        data.garantiaDevuelta = true;
+      }
+      await updateDoc(doc(db, 'alquileres', id), data);
       setEditando(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
@@ -158,7 +172,7 @@ export default function Dashboard() {
               {recientes.map((r) => (
                 <tr key={r.id}>
                   <td>{r.clienteNombre}</td>
-                  <td>{r.clienteTelefono ? <span>📞 {r.clienteTelefono}</span> : '-'}</td>
+                  <td>{r.clienteTelefonoPrincipal || r.clienteTelefono?.split(' / ')[0] || ''}{r.clienteTelefonoSecundario ? ` / ${r.clienteTelefonoSecundario}` : r.clienteTelefono?.includes(' / ') ? ` / ${r.clienteTelefono.split(' / ')[1]}` : ''}</td>
                   <td>{r.fechaAlquiler}</td>
                   <td>${r.precio}</td>
                   <td><span className={`badge badge-${r.estado}`}>{r.estado}</span></td>
@@ -199,8 +213,12 @@ export default function Dashboard() {
 
             <div className="form-row" style={{ marginBottom: 8 }}>
               <div className="form-group">
-                <label>Teléfono</label>
-                <input value={editForm.telefono} onChange={(e) => setEditForm({ ...editForm, telefono: e.target.value })} placeholder="Ej: 11 1234-5678" type="tel" />
+                <label>Celular principal</label>
+                <input value={editForm.telefonoPrincipal} onChange={(e) => setEditForm({ ...editForm, telefonoPrincipal: e.target.value })} placeholder="381..." type="tel" />
+              </div>
+              <div className="form-group">
+                <label>Celular secundario</label>
+                <input value={editForm.telefonoSecundario} onChange={(e) => setEditForm({ ...editForm, telefonoSecundario: e.target.value })} placeholder="Opcional" type="tel" />
               </div>
               <div className="form-group">
                 <label>Estado</label>
@@ -250,7 +268,7 @@ export default function Dashboard() {
                         }
                       }} />
                     </label>
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" />}
+                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
                     {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
                       <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
                         <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
@@ -326,6 +344,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      <FotoModal src={fotoAmpliada} onClose={() => setFotoAmpliada(null)} />
     </div>
   );
 }

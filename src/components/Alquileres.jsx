@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { initTopScrollbar } from '../utils/topScrollbar';
@@ -10,7 +11,24 @@ import { prepararItemsConFotosSeparadas, eliminarFotosDeAlquiler, itemTieneFoto 
 import FotoModal from './FotoModal';
 import FotoItem from './FotoItem';
 
+function getHoyLocalISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function calcularDiasAtraso(fechaISO, refISO) {
+  if (!fechaISO) return null;
+  const f = new Date(`${fechaISO}T00:00:00`);
+  const r = new Date(`${refISO}T00:00:00`);
+  return Math.round((r - f) / 86400000);
+}
+
 export default function Alquileres() {
+  const [searchParams] = useSearchParams();
+  const hoyISO = getHoyLocalISO();
   const [alquileres, setAlquileres] = useState([]);
   const [filter, setFilter] = useState('todos');
   const [filtroFechaDev, setFiltroFechaDev] = useState('');
@@ -19,9 +37,15 @@ export default function Alquileres() {
   const [err, setErr] = useState('');
   const [sortField, setSortField] = useState('fechaAlquiler');
   const [sortDir, setSortDir] = useState('desc');
-  const [modoBusqueda, setModoBusqueda] = useState('cliente');
+  const [modoBusqueda, setModoBusqueda] = useState(() => (
+    searchParams.get('modo') === 'devolver' ? 'devolver' : 'cliente'
+  ));
   const [searchCliente, setSearchCliente] = useState('');
   const [searchDisfraz, setSearchDisfraz] = useState('');
+  const [fechaControlDev, setFechaControlDev] = useState(hoyISO);
+  const [tipoFechaDev, setTipoFechaDev] = useState('hasta'); // 'hasta' | 'exacta'
+  const [searchDevolver, setSearchDevolver] = useState('');
+  const [ordenDevolver, setOrdenDevolver] = useState('desc'); // 'desc' (hoy/recientes primero) | 'asc' (más atrasados primero)
   const [editando, setEditando] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [fotoAmpliada, setFotoAmpliada] = useState(null);
@@ -242,6 +266,37 @@ export default function Alquileres() {
 
   const conteos = modoBusqueda === 'disfraz' ? conteosDisfraz : conteosCliente;
 
+  // ─── Control de Devoluciones (Por Devolver) ────────────────────────
+  const pendientesDevolverHoyCount = alquileres.filter(
+    (a) => normalizarEstado(a.estado) === 'retirado' && (!a.fechaDevolucion || a.fechaDevolucion <= hoyISO)
+  ).length;
+
+  const porDevolverLista = modoBusqueda === 'devolver'
+    ? alquileres
+        .filter((a) => {
+          const est = normalizarEstado(a.estado);
+          if (tipoFechaDev === 'hasta') {
+            if (est !== 'retirado') return false;
+            if (!fechaControlDev) return true;
+            return !a.fechaDevolucion || a.fechaDevolucion <= fechaControlDev;
+          }
+          // Solo fecha exacta: muestra todos los aún no devueltos con esa fecha de devolución
+          if (est === 'devuelto') return false;
+          return a.fechaDevolucion === fechaControlDev;
+        })
+        .filter((a) => {
+          if (!searchDevolver.trim()) return true;
+          const nombresItems = (a.items || []).map((it) => it.nombre).join(' ');
+          return coincideBusqueda(searchDevolver, [a.clienteNombre, a.clienteApellido, nombresItems]);
+        })
+        .sort((a, b) => {
+          const fa = a.fechaDevolucion || '0000-00-00';
+          const fb = b.fechaDevolucion || '0000-00-00';
+          if (fa !== fb) return ordenDevolver === 'desc' ? fb.localeCompare(fa) : fa.localeCompare(fb);
+          return (a.clienteNombre || '').localeCompare(b.clienteNombre || '');
+        })
+    : [];
+
   return (
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
@@ -266,9 +321,15 @@ export default function Alquileres() {
         >
           🎭 Por Disfraz
         </button>
+        <button
+          className={`tab ${modoBusqueda === 'devolver' ? 'active' : ''}`}
+          onClick={() => { setModoBusqueda('devolver'); setDetalle(null); }}
+        >
+          ⏰ Por Devolver ({pendientesDevolverHoyCount})
+        </button>
       </div>
 
-      {modoBusqueda === 'cliente' ? (
+      {modoBusqueda === 'cliente' && (
         <div className="search-box">
           <input
             placeholder="Buscar por apellido o nombre (ej: torres, juan torres)..."
@@ -284,7 +345,9 @@ export default function Alquileres() {
           />
           <button onClick={() => { setSearchCliente(''); setDetalle(null); }} className="btn btn-secondary">Limpiar</button>
         </div>
-      ) : (
+      )}
+
+      {modoBusqueda === 'disfraz' && (
         <div className="search-box">
           <input
             placeholder="Buscar disfraz por nombre o talle (ej: spiderman, princesa, granadero)..."
@@ -302,21 +365,88 @@ export default function Alquileres() {
         </div>
       )}
 
-      <div className="tabs">
-        {['todos', ...ESTADOS_ALQUILER.map((e) => e.value)].map((t) => (
-          <button key={t} className={`tab ${filter === t ? 'active' : ''}`} onClick={() => { setFilter(t); setDetalle(null); }}>
-            {t === 'todos' ? 'Todos' : t.charAt(0).toUpperCase() + t.slice(1)} ({conteos[t] ?? 0})
-          </button>
-        ))}
-      </div>
+      {modoBusqueda !== 'devolver' && (
+        <>
+          <div className="tabs">
+            {['todos', ...ESTADOS_ALQUILER.map((e) => e.value)].map((t) => (
+              <button key={t} className={`tab ${filter === t ? 'active' : ''}`} onClick={() => { setFilter(t); setDetalle(null); }}>
+                {t === 'todos' ? 'Todos' : t.charAt(0).toUpperCase() + t.slice(1)} ({conteos[t] ?? 0})
+              </button>
+            ))}
+          </div>
 
-      <div className="search-box" style={{ marginBottom: 16 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          Fecha devolución:
-          <input type="date" value={filtroFechaDev} onChange={(e) => { setFiltroFechaDev(e.target.value); setDetalle(null); }} style={{ padding: '6px 10px', border: '2px solid var(--border)', borderRadius: 8, fontSize: '0.9rem' }} />
-        </label>
-        {filtroFechaDev && <button className="btn btn-small btn-secondary" onClick={() => setFiltroFechaDev('')}>Limpiar fecha</button>}
-      </div>
+          <div className="search-box" style={{ marginBottom: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              Fecha devolución:
+              <input type="date" value={filtroFechaDev} onChange={(e) => { setFiltroFechaDev(e.target.value); setDetalle(null); }} style={{ padding: '6px 10px', border: '2px solid var(--border)', borderRadius: 8, fontSize: '0.9rem' }} />
+            </label>
+            {filtroFechaDev && <button className="btn btn-small btn-secondary" onClick={() => setFiltroFechaDev('')}>Limpiar fecha</button>}
+          </div>
+        </>
+      )}
+
+      {modoBusqueda === 'devolver' && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="form-row" style={{ alignItems: 'flex-end', marginBottom: 10 }}>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <label>Fecha de devolución</label>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="date"
+                  value={fechaControlDev}
+                  onChange={(e) => { setFechaControlDev(e.target.value); setDetalle(null); }}
+                />
+                {fechaControlDev !== hoyISO && (
+                  <button type="button" className="btn btn-small btn-secondary" onClick={() => setFechaControlDev(hoyISO)}>
+                    Hoy
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <label>Mostrar</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className={`btn btn-small ${tipoFechaDev === 'hasta' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTipoFechaDev('hasta')}
+                >
+                  Hasta esta fecha (para atrás)
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-small ${tipoFechaDev === 'exacta' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTipoFechaDev('exacta')}
+                >
+                  Solo esta fecha exacta
+                </button>
+              </div>
+            </div>
+            <div className="form-group" style={{ flex: '1 1 200px' }}>
+              <label>Filtrar lista</label>
+              <input
+                placeholder="Apellido, nombre o disfraz..."
+                value={searchDevolver}
+                onChange={(e) => setSearchDevolver(e.target.value)}
+              />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <button
+                type="button"
+                className="btn btn-small btn-secondary"
+                onClick={() => setOrdenDevolver((o) => (o === 'desc' ? 'asc' : 'desc'))}
+              >
+                {ordenDevolver === 'desc' ? 'Orden: Hoy primero ↓' : 'Orden: Más atrasados primero ↑'}
+              </button>
+            </div>
+          </div>
+          <p className="text-muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+            {tipoFechaDev === 'hasta'
+              ? `Mostrando ${porDevolverLista.length} alquiler(es) en estado Retirado con fecha de devolución hasta el ${fechaControlDev || 'hoy'} (o sin fecha).`
+              : `Mostrando ${porDevolverLista.length} alquiler(es) sin devolver con fecha de devolución exacta ${fechaControlDev}.`}
+          </p>
+        </div>
+      )}
 
       {modoBusqueda === 'cliente' ? (
       <div className="table-wrapper">
@@ -409,7 +539,7 @@ export default function Alquileres() {
         </tbody>
       </table>
       </div>
-      ) : (
+      ) : modoBusqueda === 'disfraz' ? (
       <div className="table-wrapper">
       {!cargando && !mostrarListaDisfraz ? (
         <div className="card" style={{ textAlign: 'center', padding: 24 }}>
@@ -536,6 +666,139 @@ export default function Alquileres() {
         </tbody>
       </table>
       )}
+      </div>
+      ) : (
+      <div className="table-wrapper">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Cliente / Teléfono</th>
+            <th>Disfraces</th>
+            <th>Devolución / Atraso</th>
+            <th className="col-garantia">Garantía</th>
+            <th>Estado</th>
+            <th>Acción rápida</th>
+          </tr>
+        </thead>
+        <tbody>
+          {porDevolverLista.map((a) => {
+            const est = normalizarEstado(a.estado);
+            const dias = calcularDiasAtraso(a.fechaDevolucion, hoyISO);
+            const telPrincipal = (a.clienteTelefonoPrincipal || a.clienteTelefono?.split(' / ')[0] || '').trim();
+            const telClean = telPrincipal.replace(/[^0-9]/g, '');
+            const waReminder = getWhatsAppReminderUrl(a);
+            const waReceipt = getWhatsAppReceiptUrl(a);
+            return (
+              <tr key={a.id}>
+                <td>
+                  <div style={{ fontWeight: 600 }}>{a.clienteNombre}</div>
+                  {telClean && (
+                    <a href={`https://wa.me/54${telClean}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>
+                      📞 {telPrincipal}
+                    </a>
+                  )}
+                </td>
+                <td>
+                  <div style={{ fontSize: '0.9rem', marginBottom: 4 }}>
+                    {(a.items || []).map((it) => it.nombre).filter(Boolean).join(', ') || '-'}
+                  </div>
+                  <button
+                    className="btn-link"
+                    onClick={() => {
+                      setDetalle(detalle?.id === a.id ? null : a);
+                      setTimeout(() => {
+                        const el = document.getElementById('detalle-alquiler');
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }, 100);
+                    }}
+                    style={{ fontWeight: 600, padding: '3px 8px', background: '#f0f2f5', borderRadius: 6, whiteSpace: 'nowrap', fontSize: '0.8rem' }}
+                  >
+                    📷 {a.items?.length || 0} items
+                  </button>
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <div style={{ fontWeight: 600 }}>{a.fechaDevolucion || 'Sin fecha'}</div>
+                  <div style={{ marginTop: 4 }}>
+                    {dias === null ? (
+                      <span className="badge badge-retirado">Sin fecha</span>
+                    ) : dias > 0 ? (
+                      <span className="badge" style={{ background: '#f8d7da', color: '#842029' }}>
+                        ⚠️ {dias} día{dias !== 1 ? 's' : ''} de atraso
+                      </span>
+                    ) : dias === 0 ? (
+                      <span className="badge badge-reservado">Vence hoy</span>
+                    ) : (
+                      <span className="badge badge-retirado">En {Math.abs(dias)} día{Math.abs(dias) !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
+                </td>
+                <td className="col-garantia">
+                  {a.garantia ? (a.garantiaDevuelta ? '✅ Devuelta' : `❌ ${a.garantia}`) : '-'}
+                </td>
+                <td>
+                  <select
+                    value={est}
+                    onChange={(e) => {
+                      const nuevoEstado = e.target.value;
+                      cambiarEstado(a.id, nuevoEstado, a);
+                      if (detalle?.id === a.id) setDetalle({ ...detalle, estado: nuevoEstado });
+                    }}
+                    className="estado-select"
+                  >
+                    {ESTADOS_ALQUILER.map((e) => (
+                      <option key={e.value} value={e.value}>{e.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button
+                    onClick={() => {
+                      cambiarEstado(a.id, 'devuelto', a);
+                      if (detalle?.id === a.id) setDetalle({ ...detalle, estado: 'devuelto' });
+                    }}
+                    className="btn btn-small btn-primary"
+                    style={{ background: '#198754' }}
+                    title="Marcar como devuelto"
+                  >
+                    ✓ Devuelto
+                  </button>
+                  {waReminder && (
+                    <a
+                      href={waReminder}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-small"
+                      style={{ marginLeft: 4, textDecoration: 'none', background: '#ffcccc', color: '#b30000' }}
+                      title="Enviar reclamo por WhatsApp"
+                    >
+                      ⚠️ Reclamar
+                    </a>
+                  )}
+                  {!waReminder && waReceipt && (
+                    <a
+                      href={waReceipt}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-small btn-secondary"
+                      style={{ marginLeft: 4, textDecoration: 'none' }}
+                      title="Comprobante WhatsApp"
+                    >
+                      📤
+                    </a>
+                  )}
+                  <button onClick={() => abrirEditar(a)} className="btn btn-small btn-secondary" style={{ marginLeft: 4 }} title="Editar">✏️</button>
+                </td>
+              </tr>
+            );
+          })}
+          {cargando && (
+            <tr><td colSpan={6} className="text-muted">Cargando pendientes...</td></tr>
+          )}
+          {!cargando && porDevolverLista.length === 0 && (
+            <tr><td colSpan={6} className="text-muted">🎉 No hay alquileres pendientes de devolver para ese criterio</td></tr>
+          )}
+        </tbody>
+      </table>
       </div>
       )}
 

@@ -10,8 +10,16 @@ import FotoModal from './FotoModal';
 import FotoItem from './FotoItem';
 import { Link } from 'react-router-dom';
 
+function getHoyLocalISO() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export default function Dashboard() {
-  const [stats, setStats] = useState({ clientes: 0, alquileres: 0, reservados: 0, caja: 0, señas: 0 });
+  const [stats, setStats] = useState({ clientes: 0, alquileres: 0, reservados: 0, porDevolver: 0, caja: 0, señas: 0 });
   const [recientes, setRecientes] = useState([]);
   const [editando, setEditando] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -21,12 +29,16 @@ export default function Dashboard() {
   const [cargando, setCargando] = useState(true);
 
   const aplicarDatos = (clientesLista, alquileresLista) => {
+    const hoyISO = getHoyLocalISO();
     const total = alquileresLista.length;
     const res = alquileresLista.filter((d) => normalizarEstado(d.estado) === 'reservado').length;
+    const porDevolver = alquileresLista.filter(
+      (d) => normalizarEstado(d.estado) === 'retirado' && (!d.fechaDevolucion || d.fechaDevolucion <= hoyISO)
+    ).length;
     const caja = alquileresLista.reduce((s, d) => s + (Number(d.precio) || 0), 0);
     const señas = alquileresLista.reduce((s, d) => s + (Number(d.seña) || 0), 0);
     setRecientes(alquileresLista.slice(0, 5));
-    setStats({ clientes: clientesLista.length, alquileres: total, reservados: res, caja, señas });
+    setStats({ clientes: clientesLista.length, alquileres: total, reservados: res, porDevolver, caja, señas });
   };
 
   const cargar = async (force = false) => {
@@ -158,6 +170,10 @@ export default function Dashboard() {
         <div className="stat-card"><span className="stat-num">{stats.clientes}</span>Clientes</div>
         <div className="stat-card"><span className="stat-num">{stats.alquileres}</span>Alquileres</div>
         <div className="stat-card warn"><span className="stat-num">{stats.reservados}</span>Reservados</div>
+        <Link to="/alquileres?modo=devolver" className="stat-card warn" style={{ textDecoration: 'none', color: 'inherit', borderLeftColor: '#e74c3c' }}>
+          <span className="stat-num" style={{ color: stats.porDevolver > 0 ? '#c0392b' : undefined }}>{stats.porDevolver}</span>
+          ⏰ Por Devolver
+        </Link>
         <div className="stat-card"><span className="stat-num">${stats.caja.toLocaleString()}</span>Total Caja</div>
         <div className="stat-card"><span className="stat-num">${stats.señas.toLocaleString()}</span>Total Señas</div>
       </div>

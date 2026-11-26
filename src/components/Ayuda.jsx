@@ -1,287 +1,37 @@
-import { useState } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { normalizarEstado } from '../utils/estados';
-import { getAlquileres, upsertAlquilerCache } from '../utils/dataCache';
-import { esBase64Image, guardarFotoEnColeccion, eliminarFotoDeColeccion } from '../utils/fotos';
-
-function getFechaCorteISO(dias) {
-  const d = new Date();
-  d.setDate(d.getDate() - Number(dias));
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatFechaCorta(iso) {
-  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
-}
-
 export default function Ayuda() {
-  const [exportando, setExportando] = useState(false);
-  const [exportMsg, setExportMsg] = useState('');
-  const [migrando, setMigrando] = useState(false);
-  const [migraMsg, setMigraMsg] = useState('');
-  const [migrandoGar, setMigrandoGar] = useState(false);
-  const [migraGarMsg, setMigraGarMsg] = useState('');
-  const [migrandoFotos, setMigrandoFotos] = useState(false);
-  const [migraFotosMsg, setMigraFotosMsg] = useState('');
-  const [diasLimpieza, setDiasLimpieza] = useState('60');
-  const [previewLimpieza, setPreviewLimpieza] = useState(null);
-  const [limpiandoFotos, setLimpiandoFotos] = useState(false);
-  const [limpiezaMsg, setLimpiezaMsg] = useState('');
-
-  const exportar = async () => {
-    setExportando(true);
-    setExportMsg('');
-    try {
-      const [cliSnap, alqSnap, fotosSnap] = await Promise.all([
-        getDocs(collection(db, 'clientes')),
-        getDocs(collection(db, 'alquileres')),
-        getDocs(collection(db, 'alquileres_fotos')),
-      ]);
-      const data = {
-        exportado: new Date().toISOString(),
-        clientes: cliSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-        alquileres: alqSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-        alquileres_fotos: fotosSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-      };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `mundo-disfraz-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setExportMsg(`✅ ${data.clientes.length} clientes, ${data.alquileres.length} alquileres y ${data.alquileres_fotos.length} fotos separadas exportadas`);
-    } catch (e) {
-      setExportMsg('❌ Error al exportar: ' + e.message);
-    }
-    setExportando(false);
-  };
-
-  const migrarFotosSeparadas = async () => {
-    setMigrandoFotos(true);
-    setMigraFotosMsg('Analizando alquileres con fotos embebidas...');
-    try {
-      const todos = await getAlquileres(false);
-      const pendientes = todos.filter((a) => (a.items || []).some((it) => esBase64Image(it.fotoUrl)));
-      const totalFotos = pendientes.reduce(
-        (sum, a) => sum + (a.items || []).filter((it) => esBase64Image(it.fotoUrl)).length,
-        0
-      );
-
-      if (pendientes.length === 0) {
-        setMigraFotosMsg('✅ Todas las fotos ya están separadas en "alquileres_fotos". No hay nada pendiente.');
-        setMigrandoFotos(false);
-        return;
-      }
-
-      const ok = window.confirm(
-        `Se encontraron ${totalFotos} fotos embebidas en ${pendientes.length} alquileres.\n\n` +
-        `Se van a mover de forma segura a la colección separada "alquileres_fotos" (sin borrar ninguna foto) para que la app abra mucho más rápido.\n\n¿Continuar?`
-      );
-      if (!ok) {
-        setMigraFotosMsg('');
-        setMigrandoFotos(false);
-        return;
-      }
-
-      let alqMovidos = 0;
-      let fotosMovidas = 0;
-
-      for (const a of pendientes) {
-        const nuevosItems = [];
-        for (const it of (a.items || [])) {
-          if (esBase64Image(it.fotoUrl)) {
-            const fotoId = await guardarFotoEnColeccion(it.fotoUrl, a.id);
-            fotosMovidas++;
-            const { fotoUrl: _old, ...rest } = it;
-            nuevosItems.push({ ...rest, fotoUrl: '', fotoId });
-          } else {
-            nuevosItems.push(it);
-          }
-        }
-        await updateDoc(doc(db, 'alquileres', a.id), { items: nuevosItems });
-        upsertAlquilerCache(a.id, { items: nuevosItems });
-        alqMovidos++;
-        if (alqMovidos % 5 === 0 || alqMovidos === pendientes.length) {
-          setMigraFotosMsg(`⏳ Migrando... ${alqMovidos}/${pendientes.length} alquileres (${fotosMovidas}/${totalFotos} fotos)`);
-        }
-      }
-
-      setMigraFotosMsg(`✅ Migración completa: ${fotosMovidas} fotos de ${alqMovidos} alquileres movidas a "alquileres_fotos".`);
-    } catch (e) {
-      setMigraFotosMsg('❌ Error durante la migración (las fotos ya movidas quedaron a salvo, podés reintentar): ' + e.message);
-    }
-    setMigrandoFotos(false);
-  };
-
-  const analizarLimpiezaFotos = async () => {
-    setLimpiezaMsg('');
-    try {
-      const corte = getFechaCorteISO(diasLimpieza);
-      const todos = await getAlquileres(false);
-      const candidatos = todos.filter((a) => {
-        if (normalizarEstado(a.estado) !== 'devuelto') return false;
-        const fechaRef = a.fechaDevolucion || a.fechaAlquiler || '';
-        if (!fechaRef || fechaRef > corte) return false;
-        return (a.items || []).some((it) => Boolean(it.fotoId) || esBase64Image(it.fotoUrl));
-      });
-      const totalFotos = candidatos.reduce(
-        (sum, a) => sum + (a.items || []).filter((it) => Boolean(it.fotoId) || esBase64Image(it.fotoUrl)).length,
-        0
-      );
-      setPreviewLimpieza({
-        dias: Number(diasLimpieza),
-        corte,
-        alquileresCount: candidatos.length,
-        fotosCount: totalFotos,
-        ids: candidatos.map((a) => a.id),
-      });
-    } catch (e) {
-      setLimpiezaMsg('❌ Error al analizar: ' + e.message);
-    }
-  };
-
-  const limpiarFotosViejas = async () => {
-    if (!previewLimpieza || previewLimpieza.fotosCount === 0) return;
-    const ok = window.confirm(
-      `¿Eliminar ${previewLimpieza.fotosCount} fotos de ${previewLimpieza.alquileresCount} alquileres YA DEVUELTOS con fecha anterior o igual al ${formatFechaCorta(previewLimpieza.corte)}?\n\n` +
-      `• Recomendamos tener un backup guardado antes.\n` +
-      `• NO se borra ningún alquiler, cliente ni reporte.\n` +
-      `• NO se toca ningún alquiler Reservado ni Retirado.`
-    );
-    if (!ok) return;
-
-    setLimpiandoFotos(true);
-    setLimpiezaMsg('Limpiando fotos viejas...');
-    try {
-      const todos = await getAlquileres(false);
-      const idSet = new Set(previewLimpieza.ids);
-      const objetivos = todos.filter((a) => idSet.has(a.id) && normalizarEstado(a.estado) === 'devuelto');
-
-      let alqLimpiados = 0;
-      let fotosEliminadas = 0;
-
-      for (const a of objetivos) {
-        const nuevosItems = [];
-        let cambio = false;
-        for (const it of (a.items || [])) {
-          if (it.fotoId || esBase64Image(it.fotoUrl)) {
-            if (it.fotoId) await eliminarFotoDeColeccion(it.fotoId);
-            fotosEliminadas++;
-            cambio = true;
-            const { fotoId: _oldId, fotoUrl: _oldUrl, ...rest } = it;
-            nuevosItems.push({ ...rest, fotoUrl: '', fotoLimpiada: true });
-          } else {
-            nuevosItems.push(it);
-          }
-        }
-        if (cambio) {
-          await updateDoc(doc(db, 'alquileres', a.id), { items: nuevosItems });
-          upsertAlquilerCache(a.id, { items: nuevosItems });
-          alqLimpiados++;
-          if (alqLimpiados % 5 === 0 || alqLimpiados === objetivos.length) {
-            setLimpiezaMsg(`⏳ Limpiando... ${alqLimpiados}/${objetivos.length} alquileres (${fotosEliminadas} fotos eliminadas)`);
-          }
-        }
-      }
-
-      setPreviewLimpieza(null);
-      setLimpiezaMsg(`✅ Mantenimiento completado: ${fotosEliminadas} fotos eliminadas de ${alqLimpiados} alquileres devueltos. Todos los registros y reportes quedaron intactos.`);
-    } catch (e) {
-      setLimpiezaMsg('❌ Error durante la limpieza: ' + e.message);
-    }
-    setLimpiandoFotos(false);
-  };
-
-  const migrarTelefonos = async () => {
-    setMigrando(true);
-    setMigraMsg('');
-    try {
-      const snap = await getDocs(collection(db, 'clientes'));
-      let migrados = 0;
-      for (const d of snap.docs) {
-        const c = d.data();
-        if (!c.telefono || c.telefonoPrincipal) continue;
-        const partes = c.telefono.split(' / ');
-        const ref = doc(db, 'clientes', d.id);
-        await updateDoc(ref, {
-          telefonoPrincipal: partes[0].trim(),
-          telefonoSecundario: partes[1]?.trim() || '',
-        });
-        migrados++;
-      }
-      setMigraMsg(`✅ ${migrados} clientes migrados (teléfono dividido en principal/secundario)`);
-    } catch (e) {
-      setMigraMsg('❌ Error: ' + e.message);
-    }
-    setMigrando(false);
-  };
-
-  const migrarGarantiasDevueltas = async () => {
-    setMigrandoGar(true);
-    setMigraGarMsg('');
-    try {
-      const snap = await getDocs(collection(db, 'alquileres'));
-      let migrados = 0;
-      for (const d of snap.docs) {
-        const a = d.data();
-        if (a.estado === 'devuelto' && a.garantia && !a.garantiaDevuelta) {
-          await updateDoc(doc(db, 'alquileres', d.id), { garantiaDevuelta: true });
-          migrados++;
-        }
-      }
-      setMigraGarMsg(`✅ ${migrados} alquileres actualizados (garantía marcada como devuelta)`);
-    } catch (e) {
-      setMigraGarMsg('❌ Error: ' + e.message);
-    }
-    setMigrandoGar(false);
-  };
-
   return (
     <div className="page">
       <h2>🎭 Ayuda — Mundo Disfraz</h2>
-      <p className="text-muted" style={{ marginBottom: 20 }}>Resumen de todas las funcionalidades de la aplicación.</p>
+      <p className="text-muted" style={{ marginBottom: 20 }}>
+        Guía completa de todas las funcionalidades actuales de la aplicación.
+      </p>
 
       <div className="help-section">
-        <h3>🔐 Login</h3>
+        <h3>🔐 Acceso y Roles</h3>
         <ul>
-          <li>Inicio de sesión con email y contraseña</li>
-          <li>Rutas protegidas (redirige al login si no está autenticado)</li>
+          <li>Inicio de sesión con email y contraseña (rutas protegidas).</li>
+          <li><strong>Usuario operativo del local:</strong> acceso completo a Inicio, Clientes, Nuevo Alquiler, Alquileres, Reportes y Ayuda.</li>
+          <li><strong>Cuentas supervisoras:</strong> además acceden a la sección <strong>⚙️ Mantenimiento</strong> (backups, limpieza de fotos viejas y migraciones), oculta para el resto de los usuarios.</li>
         </ul>
       </div>
 
       <div className="help-section">
-        <h3>📊 Dashboard</h3>
+        <h3>📊 Inicio (Panel Principal)</h3>
         <ul>
-          <li>Tarjetas con estadísticas: Clientes, Alquileres, Reservados, Total Caja, Total Señas</li>
-          <li>Lista de últimos alquileres con teléfono visible (principal/secundario) y cambio rápido de estado</li>
-          <li>Botón WhatsApp comprobante y recordatorio fuera de término (⚠️) en cada fila</li>
-          <li>✏️ Editar: modal con todos los datos incluyendo fotos, teléfono (dos campos) y estado</li>
-          <li>🗑️ Eliminar alquiler desde el mismo Dashboard</li>
+          <li>Tarjetas con estadísticas en vivo: <strong>Clientes</strong>, <strong>Alquileres</strong>, <strong>Reservados</strong>, <strong>⏰ Por Devolver</strong> (acceso directo a vencidos / de hoy), <strong>Total Caja</strong> y <strong>Total Señas</strong>.</li>
+          <li>Lista de los últimos 5 alquileres con teléfono visible, cambio rápido de estado, edición (✏️), eliminación (🗑️), comprobante WhatsApp (📤) y recordatorio de fuera de término (⚠️).</li>
+          <li>Botón <strong>🔄 Actualizar</strong> arriba a la derecha para traer cambios cargados desde otro celular o computadora.</li>
         </ul>
       </div>
 
       <div className="help-section">
         <h3>👥 Clientes</h3>
         <ul>
-          <li>Buscar por apellido (sin importar mayúsculas/minúsculas)</li>
-          <li>Sin texto, trae <strong>todos</strong> ordenados alfabéticamente</li>
-          <li><strong>Crear</strong>, <strong>Editar</strong> y <strong>Borrar</strong> clientes (borrar solo si no tiene alquileres)</li>
-          <li>Teléfono dividido en <strong>Celular Principal</strong> (prefijo 381) y <strong>Celular Secundario</strong> (opcional)</li>
-          <li>Al crear o editar, los teléfonos con formato antiguo ("381... / ...") se separan automáticamente</li>
-          <li>Se eliminó el campo Email del formulario de alta y edición</li>
-          <li>Al crear un cliente, aparece botón <strong>"➕ Cargar Alquiler"</strong> para ir directo a Nuevo Alquiler</li>
-          <li>Ver <strong>historial de alquileres</strong> del cliente (botón 📋)</li>
-          <li>En el historial: <strong>"➕ Nuevo Alquiler"</strong> para cargar otro alquiler a ese cliente</li>
-          <li>Tocar una fila del historial muestra la <strong>ficha completa</strong> con fotos, fechas, precios y teléfono</li>
-          <li>✏️ Editar y 🗑️ eliminar alquiler directamente desde el historial</li>
-          <li>En la edición del alquiler: teléfono (dos campos), estado al tope, cambiar fotos</li>
-          <li>La página se desplaza automáticamente al detalle al abrirlo</li>
+          <li><strong>Búsqueda flexible:</strong> buscá por <strong>apellido, nombre o teléfono</strong>, sin importar tildes, mayúsculas, comas ni el orden de palabras (ej: <em>"torres"</em>, <em>"gomez"</em>, <em>"juan torres"</em>). Sin texto trae todos ordenados alfabéticamente.</li>
+          <li><strong>Crear</strong>, <strong>Editar</strong> y <strong>Borrar</strong> clientes (solo permite borrar si no tiene alquileres registrados).</li>
+          <li>Teléfono dividido en <strong>Celular Principal</strong> (prefijo 381) y <strong>Celular Secundario</strong> (opcional).</li>
+          <li>Al crear un cliente aparece el botón <strong>"➕ Cargar Alquiler"</strong> para ir directo a Nuevo Alquiler.</li>
+          <li>Ver <strong>historial de alquileres</strong> del cliente (botón 📋), con acceso a ficha completa (fotos, fechas, fecha/hora de retiro, precios), edición (✏️), borrado (🗑️) y botón <strong>"➕ Nuevo Alquiler"</strong>.</li>
         </ul>
       </div>
 
@@ -289,204 +39,84 @@ export default function Ayuda() {
         <h3>➕ Nuevo Alquiler (3 pasos)</h3>
         <h4>Paso 1 — Seleccionar Cliente</h4>
         <ul>
-          <li>Buscar por apellido; presionar Buscar o Enter</li>
-          <li>Columnas Apellido y Nombre ordenables</li>
-          <li>Si el cliente no existe, aparece un <strong>formulario para crearlo</strong> ahí mismo. Al crearlo, se selecciona automáticamente y pasa al paso 2</li>
-          <li>Doble click para seleccionar cliente</li>
-          <li>Botón "Saltar (sin cliente)"</li>
+          <li>Búsqueda flexible por apellido, nombre o teléfono (sin importar tildes ni orden).</li>
+          <li>Si el cliente no existe, se puede crear ahí mismo y pasa automáticamente al Paso 2.</li>
+          <li>Doble click para seleccionar o botón "Saltar (sin cliente)".</li>
         </ul>
-        <h4>Paso 2 — Items, Fechas y Precios</h4>
+        <h4>Paso 2 — Items, Fechas, Retiro y Precios</h4>
         <ul>
-          <li>Item simple: nombre del disfraz (texto), talle y foto</li>
-          <li>Botón <strong>"+ Agregar item"</strong> para añadir más disfraces manualmente</li>
-          <li>Botón <strong>"📷 Tomar foto"</strong> que abre la cámara del celular directamente</li>
-          <li>Foto: también pegar imagen (Ctrl+V) o pegar URL</li>
-          <li>Fecha de Alquiler, Fecha del Evento, Fecha de Devolución, Turno, Colegio</li>
-          <li>Precio (default $17000), Seña (default $0), Garantía + checkbox "Garantía devuelta", Nota</li>
-          <li>Selector de <strong>Estado</strong> (reservado, retirado, devuelto)</li>
-          <li>Muestra historial de alquileres del cliente seleccionado</li>
+          <li>Cada item tiene nombre del disfraz, talle y foto (<strong>📷 Tomar foto</strong> con cámara del celular, subir archivo, pegar con Ctrl+V o pegar URL).</li>
+          <li>Botón <strong>"+ Agregar item"</strong> para sumar varios disfraces en el mismo alquiler.</li>
+          <li>Fechas: <strong>Fecha de Alquiler</strong>, <strong>Fecha del Evento</strong> y <strong>Fecha de Devolución</strong>, más Turno y Colegio.</li>
+          <li>Precio (default $17000), Seña, Garantía + checkbox "Garantía devuelta".</li>
+          <li><strong>Fecha que retira y Hora de retiro (opcionales):</strong> para cuando el cliente reserva y retira otro día (podés escribir hora exacta ej. <code>17:30</code> o franja ej. <code>de 17 a 19 hs</code>). Si se lo lleva en el momento, se dejan vacíos.</li>
+          <li>Selector de <strong>Estado</strong> simplificado en 3 opciones: <strong>Reservado</strong> (por defecto), <strong>Retirado</strong> y <strong>Devuelto</strong>.</li>
+          <li>Muestra el historial de alquileres anteriores del cliente seleccionado.</li>
         </ul>
-        <h4>Paso 3 — Confirmar</h4>
+        <h4>Paso 3 — Confirmar y Comprobante WhatsApp</h4>
         <ul>
-          <li>Resumen de todo antes de guardar</li>
-          <li>Al confirmar: las fotos se comprimen y guardan como <strong>base64</strong> en Firestore</li>
-          <li>Se guarda el teléfono del cliente (principal + secundario)</li>
-          <li>Se abre WhatsApp con el <strong>comprobante</strong> (Precio, Seña, Saldo a Pagar, Garantía + términos)</li>
-          <li>WhatsApp usa el <strong>Celular Principal</strong> (o el primer teléfono del campo combinado)</li>
-          <li><strong>Al guardar:</strong> aparece un mensaje preguntando "¿Enviar el comprobante por WhatsApp?" — se envía apenas se confirma el alquiler, sin perder el número</li>
-          <li>Si no se quiere enviar en ese momento, el botón "📤 Enviar comprobante" queda arriba de la página para enviarlo después</li>
-          <li>Si la Seña es $0, se omite la línea "Saldo a Pagar"</li>
-          <li><strong>Validación de fotos:</strong> si hay items sin foto, pregunta "¿Continuar igual?" antes de guardar</li>
-          <li>El botón de WhatsApp comprobante se mantiene visible aunque desaparezca el mensaje de éxito</li>
-          <li>Se limpia el formulario y vuelve al paso 1</li>
+          <li>Resumen completo antes de guardar (incluyendo fecha y hora de retiro si se cargaron).</li>
+          <li>Validación si algún item quedó sin foto (pregunta "¿Continuar igual?").</li>
+          <li>Las fotos nuevas se comprimen a ~60 KB y se guardan en una colección separada (<code>alquileres_fotos</code>) para mantener la app rápida.</li>
+          <li>Al confirmar ofrece enviar el <strong>comprobante por WhatsApp</strong> al Celular Principal, incluyendo Precio, Seña, Garantía, Saldo a Pagar (si hubo seña), <strong>Retiro del disfraz</strong> (si se cargó fecha/hora) y condiciones de devolución.</li>
         </ul>
       </div>
 
       <div className="help-section">
-        <h3>📋 Alquileres</h3>
+        <h3>📋 Alquileres (3 modos de consulta)</h3>
+        <h4>👤 Modo 1 — Por Cliente</h4>
         <ul>
-          <li>Lista completa con <strong>búsqueda flexible por cliente</strong> (sin importar tildes, comas ni orden) y modo <strong>🎭 Por Disfraz</strong> con fotos visibles para ver quién se llevó cada disfraz</li>
-          <li>Pestañas de filtro: Todos, Reservado, Retirado, Devuelto</li>
-          <li>Filtro por <strong>fecha de devolución</strong></li>
-          <li>Columnas <strong>ordenables</strong>: Cliente, Fecha/Turno, Precio, Estado</li>
-          <li>Cambiar estado desde un menú desplegable en cada fila</li>
-          <li>Teléfono visible en cada fila (📞 principal/secundario)</li>
-          <li>Botones WhatsApp comprobante (📤) y recordatorio fuera de término (⚠️)</li>
-          <li><strong>📷 X items</strong> → abre ficha con foto de cada disfraz + info completa</li>
-          <li>En el detalle: <strong>selector de estado</strong> y botón <strong>"✏️ Editar"</strong></li>
-          <li>Al cambiar estado a "devuelto" con garantía pendiente, se marca automáticamente como devuelta (sin preguntar)</li>
-          <li>✏️ Editar → modal con teléfono (dos campos), estado, items con fotos, fechas, precio, nota</li>
-          <li>🗑️ Borrar (con confirmación)</li>
-          <li>Tabla con scroll horizontal en mobile</li>
+          <li><strong>Búsqueda flexible:</strong> por apellido o nombre en cualquier orden, sin importar comas ni tildes. Al empezar a escribir cambia automáticamente a la pestaña <strong>Todos</strong> para encontrar siempre al cliente al instante.</li>
+          <li><strong>Solo 3 estados claros</strong> con contador en vivo en cada pestaña: <strong>Todos (N)</strong>, <strong>Reservado (N)</strong>, <strong>Retirado (N)</strong> y <strong>Devuelto (N)</strong>.</li>
+          <li>Filtro por fecha de devolución (si un filtro oculta resultados de tu búsqueda, muestra un botón rápido para quitarlo).</li>
+          <li>Cambio rápido de estado desde cada fila o desde el detalle; al pasar a <strong>Devuelto</strong> marca automáticamente la garantía como devuelta.</li>
+          <li>Botones <strong>📷 X items</strong> (abre ficha completa con fotos y fecha/hora de retiro), <strong>📤</strong> comprobante WhatsApp, <strong>⚠️</strong> recordatorio fuera de término (solo en <em>Retirado</em> vencidos), <strong>✏️</strong> editar y <strong>🗑️</strong> borrar.</li>
+        </ul>
+        <h4>🎭 Modo 2 — Por Disfraz (con fotos)</h4>
+        <ul>
+          <li>Escribí al menos 2 letras del disfraz o talle (sin importar tildes) para ver <strong>todos los clientes que se lo llevaron</strong>, con la <strong>foto visible en cada fila</strong> (tocándola se amplía a pantalla completa).</li>
+          <li>Incluye botón directo <strong>"Ver todos los disfraces sin devolver (en Retirado)"</strong> para revisar visualmente todo lo que está en la calle.</li>
+          <li>Permite contactar por WhatsApp, cambiar el estado a <strong>Devuelto</strong>, ver la ficha completa (👁️) o editar (✏️) ahí mismo.</li>
+        </ul>
+        <h4>⏰ Modo 3 — Por Devolver (control diario)</h4>
+        <ul>
+          <li>Arranca <strong>con la fecha de hoy puesta por defecto</strong> en modo <strong>"Hasta esta fecha (para atrás)"</strong>, listando de una todos los alquileres <em>Retirados</em> que vencen hoy o están atrasados.</li>
+          <li>Permite cambiar a <strong>"Solo esta fecha exacta"</strong> (por ejemplo para ver qué devuelven mañana), filtrar por nombre/disfraz y ordenar por <em>Hoy primero</em> o <em>Más atrasados primero</em>.</li>
+          <li>Muestra etiqueta de <strong>Vence hoy</strong> o <strong>⚠️ X días de atraso</strong>, botón verde <strong>✓ Devuelto</strong> en 1 clic, botón <strong>⚠️ Reclamar</strong> por WhatsApp y acceso a fotos.</li>
         </ul>
       </div>
 
       <div className="help-section">
         <h3>📈 Reportes</h3>
         <ul>
-          <li><strong>Filtro por rango de fechas</strong> (Desde / Hasta) que afecta a todo</li>
-          <li>Tarjetas de resumen: Total Caja, Señas, Saldo Pendiente, Alquileres, Garantías x Devolver, <strong>Sin Foto</strong></li>
-          <li>Las tarjetas <strong>Garantías x Devolver</strong> y <strong>Sin Foto</strong> son clickeables: al tocarlas se despliega un listado detallado debajo con los datos filtrados</li>
-          <li>En ambos listados desplegables, la columna <strong>Estado</strong> es ordenable (tocando el encabezado alterna ▲/▼)</li>
-          <li>Pestañas para elegir gráfico:
-            <ul>
-              <li>Alquileres x Día → barras + línea de tendencia</li>
-              <li>Ingresos x Día ($) → barras + línea de tendencia</li>
-              <li>Devoluciones x Día → barras + línea de tendencia</li>
-              <li>Disfraces más Alquilados → barras horizontal (top 9)</li>
-              <li>Alquileres por Colegio → barras horizontal</li>
-              <li>Garantías Pendientes → tabla completa con ✗/✓, columnas Precio/Seña/Estado, totales por día, exportar CSV. Orden: Resumen → Totales x Día → Detalle uno a uno</li>
-              <li><strong>Buscar Disfraz</strong> → buscá por nombre de disfraz y muestra Item, Foto, Cliente, Teléfono (link a WhatsApp) y Fecha del alquiler</li>
-              <li>Detalle x Día → tabla ordenable con Monto Total y columna Garantías</li>
-            </ul>
-          </li>
-          <li>Tablas con barra de scroll superior sincronizada</li>
+          <li>Filtro por rango de fechas (Desde / Hasta) + botón <strong>🔄 Actualizar</strong>.</li>
+          <li>Tarjetas resumen: Total Caja, Señas, Saldo Pendiente, Alquileres, <strong>Garantías x Devolver</strong> (desplegable) y <strong>Sin Foto</strong> (desplegable).</li>
+          <li>Gráficos y tablas: Alquileres x Día, Ingresos x Día, Devoluciones x Día, Disfraces más Alquilados, Alquileres por Colegio, Garantías Pendientes (con exportar CSV), <strong>Buscar Disfraz</strong> (con fotos, estado y fecha de devolución) y Detalle x Día.</li>
         </ul>
       </div>
 
       <div className="help-section">
-        <h3>📱 Funcionalidades Móviles</h3>
+        <h3>⚡ Velocidad, Caché y Fotos</h3>
         <ul>
-          <li>Diseño responsive (se adapta a pantallas chicas)</li>
-          <li>Tablas con scroll horizontal en celular</li>
-          <li>Menú de navegación horizontal scrolleable</li>
-          <li>Se ocultan columnas secundarias (Dirección, Teléfono, Garantía, Colegio)</li>
-          <li>Botones más grandes para tocar con el dedo</li>
-          <li>La cámara se abre al tocar "📷 Tomar foto" (capture="environment")</li>
-          <li>Inputs y selects con tamaño táctil (16px)</li>
+          <li><strong>Caché en sesión:</strong> la app carga los datos una vez al abrir y actualiza cada cambio al instante en pantalla sin volver a descargar toda la base. Si alguien cargó algo desde otro dispositivo, tocá <strong>🔄 Actualizar</strong>.</li>
+          <li><strong>Fotos separadas (<code>alquileres_fotos</code>):</strong> las fotos se comprimen a ~60 KB (800px, calidad 0.5) y se cargan bajo demanda solo cuando abrís un alquiler o buscás por disfraz, logrando que la app abra en pocos segundos.</li>
+          <li>Al tocar cualquier foto (propia o de Google Drive) se abre en <strong>pantalla completa</strong> (se cierra con ✕, tecla Escape o tocando el fondo oscuro).</li>
         </ul>
       </div>
 
       <div className="help-section">
-        <h3>🖼️ Fotos</h3>
+        <h3>📱 Uso desde Celular</h3>
         <ul>
-          <li>Las fotos se guardan como <strong>base64</strong> directamente en Firestore</li>
-          <li>No requiere Firebase Storage ni activar facturación</li>
-          <li>Las fotos importadas de Google Drive se muestran como thumbnail inline (no abren ventana de Drive)</li>
-          <li>Al tocar cualquier foto se abre en <strong>pantalla completa</strong> (modal oscuro) con:
-            <ul>
-              <li>✕ para cerrar</li>
-              <li>Tecla Escape para cerrar</li>
-              <li>Click en fondo oscuro para cerrar</li>
-              <li>Fotos de Google Drive se muestran inline en lugar de abrir link</li>
-            </ul>
-          </li>
-          <li>Si no se puede mostrar la foto de Drive, aparece un link "Ver en Drive"</li>
-          <li>Las fotos nuevas se comprimen a ~60KB (800px, 0.5 calidad) y se guardan en una colección separada (<code>alquileres_fotos</code>) para que la app abra rápido</li>
+          <li>Diseño responsive adaptado a pantallas chicas con menú horizontal y tablas con scroll superior sincronizado.</li>
+          <li>Al tocar <strong>"📷 Tomar foto"</strong> abre directamente la cámara trasera del celular.</li>
         </ul>
       </div>
 
       <div className="help-section">
-        <h3>⚙️ Tecnología</h3>
+        <h3>⚙️ Mantenimiento (solo cuentas supervisoras)</h3>
         <ul>
-          <li><strong>Frontend:</strong> React + Vite (JavaScript)</li>
-          <li><strong>Base de datos:</strong> Firebase Firestore (NoSQL)</li>
-          <li><strong>Autenticación:</strong> Firebase Auth (email/contraseña)</li>
-          <li><strong>Fotos:</strong> Guardadas en colección separada <code>alquileres_fotos</code> con carga bajo demanda (sin Firebase Storage)</li>
-          <li><strong>Hosting:</strong> Firebase Hosting</li>
+          <li>Las herramientas administrativas (<strong>Backup / Exportar JSON</strong>, <strong>Limpieza de fotos viejas de alquileres ya devueltos</strong> y <strong>Migraciones</strong>) están protegidas en la pestaña <strong>⚙️ Mantenimiento</strong>, visible únicamente para los usuarios supervisores autorizados.</li>
         </ul>
-        <h4>📊 Límites del plan gratuito</h4>
-        <ul>
-          <li><strong>Firestore:</strong> 50.000 lecturas / 20.000 escrituras por día, 1 GB almacenado</li>
-          <li><strong>Auth:</strong> 50.000 usuarios activos por mes</li>
-          <li>Para el uso de Mundo Disfraz está más que cubierto</li>
-        </ul>
-      </div>
-
-      <div className="help-section">
-        <h3>💾 Backup / Exportar Datos</h3>
-        <p>Descargá un archivo JSON con todos los clientes, alquileres y fotos de la base de datos.</p>
-        <button onClick={exportar} className="btn btn-primary" disabled={exportando}>
-          {exportando ? 'Exportando...' : '📥 Exportar todo'}
-        </button>
-        {exportMsg && <p style={{ marginTop: 8 }}>{exportMsg}</p>}
-      </div>
-
-      <div className="help-section">
-        <h3>🚀 Optimizar velocidad (Separar fotos existentes)</h3>
-        <p>Mueve las fotos viejas que todavía están pegadas adentro de cada alquiler hacia la colección separada <code>alquileres_fotos</code> (sin borrar ninguna foto). Se ejecuta una sola vez para que la app abra en pocos segundos.</p>
-        <button onClick={migrarFotosSeparadas} className="btn btn-primary" disabled={migrandoFotos}>
-          {migrandoFotos ? 'Migrando fotos...' : '🚀 Separar fotos existentes'}
-        </button>
-        {migraFotosMsg && <p style={{ marginTop: 8 }}>{migraFotosMsg}</p>}
-      </div>
-
-      <div className="help-section">
-        <h3>🧹 Mantenimiento de fotos viejas (solo devueltos)</h3>
-        <p>Elimina únicamente las fotos de alquileres que ya están en estado <strong>Devuelto</strong> con más tiempo del elegido, manteniendo intactos todos los datos del alquiler, historial y reportes. <strong>Nunca</strong> toca alquileres Reservados ni Retirados.</p>
-        <div className="form-row" style={{ alignItems: 'flex-end', marginBottom: 12 }}>
-          <div className="form-group" style={{ flex: '0 0 auto', minWidth: 220 }}>
-            <label>Limpiar fotos de devueltos hace más de:</label>
-            <select
-              value={diasLimpieza}
-              onChange={(e) => { setDiasLimpieza(e.target.value); setPreviewLimpieza(null); setLimpiezaMsg(''); }}
-              disabled={limpiandoFotos}
-            >
-              <option value="30">30 días (1 mes)</option>
-              <option value="60">60 días (2 meses — recomendado)</option>
-              <option value="90">90 días (3 meses)</option>
-              <option value="180">180 días (6 meses)</option>
-            </select>
-          </div>
-          <div className="form-group" style={{ flex: '0 0 auto' }}>
-            <button onClick={analizarLimpiezaFotos} className="btn btn-secondary" disabled={limpiandoFotos}>
-              🔍 Analizar fotos a limpiar
-            </button>
-          </div>
-        </div>
-        {previewLimpieza && (
-          <div className="card" style={{ marginBottom: 12, background: '#f8f9fa' }}>
-            <p style={{ marginBottom: 8 }}>
-              Se encontraron <strong>{previewLimpieza.fotosCount} fotos</strong> en <strong>{previewLimpieza.alquileresCount} alquileres devueltos</strong> con fecha anterior o igual al <strong>{formatFechaCorta(previewLimpieza.corte)}</strong>.
-            </p>
-            {previewLimpieza.fotosCount > 0 ? (
-              <button onClick={limpiarFotosViejas} className="btn btn-danger" disabled={limpiandoFotos}>
-                {limpiandoFotos ? 'Limpiando...' : `🧹 Eliminar ${previewLimpieza.fotosCount} fotos viejas`}
-              </button>
-            ) : (
-              <p className="text-muted" style={{ margin: 0 }}>No hay fotos viejas para limpiar en ese rango.</p>
-            )}
-          </div>
-        )}
-        {limpiezaMsg && <p style={{ marginTop: 8 }}>{limpiezaMsg}</p>}
-      </div>
-
-      <div className="help-section">
-        <h3>📱 Migrar teléfonos</h3>
-        <p>Divide el teléfono de cada cliente en "Celular principal" y "Celular secundario" (si tiene dos números separados por " / ").</p>
-        <button onClick={migrarTelefonos} className="btn btn-primary" disabled={migrando}>
-          {migrando ? 'Migrando...' : 'Migrar teléfonos'}
-        </button>
-        {migraMsg && <p style={{ marginTop: 8 }}>{migraMsg}</p>}
-      </div>
-
-      <div className="help-section">
-        <h3>✅ Migrar garantías devueltas</h3>
-        <p>Marca como devuelta la garantía de todos los alquileres que estén en estado "devuelto" y tengan garantía pendiente.</p>
-        <button onClick={migrarGarantiasDevueltas} className="btn btn-primary" disabled={migrandoGar}>
-          {migrandoGar ? 'Migrando...' : 'Marcar garantías devueltas'}
-        </button>
-        {migraGarMsg && <p style={{ marginTop: 8 }}>{migraGarMsg}</p>}
       </div>
     </div>
   );

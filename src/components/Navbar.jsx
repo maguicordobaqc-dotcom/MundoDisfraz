@@ -1,9 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { esSupervisor } from '../utils/supervisores';
 
 export default function Navbar() {
   const { logout, user } = useAuth();
   const location = useLocation();
+  const supervisor = esSupervisor(user?.email);
 
   const isActive = (path) => (location.pathname === path ? 'nav-link active' : 'nav-link');
 
@@ -17,6 +19,7 @@ export default function Navbar() {
         <Link to="/alquileres" className={isActive('/alquileres')}>Alquileres</Link>
         <Link to="/reportes" className={isActive('/reportes')}>Reportes</Link>
         <Link to="/ayuda" className={isActive('/ayuda')}>Ayuda</Link>
+        {supervisor && <Link to="/mantenimiento" className={isActive('/mantenimiento')}>⚙️ Mantenimiento</Link>}
       </div>
       <div className="nav-user">
         <span className="nav-email">{user?.email}</span>

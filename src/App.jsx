@@ -8,12 +8,15 @@ import NuevoAlquiler from './components/NuevoAlquiler';
 import Alquileres from './components/Alquileres';
 import Reportes from './components/Reportes';
 import Ayuda from './components/Ayuda';
+import Mantenimiento from './components/Mantenimiento';
 import Sueldos from './components/Sueldos';
+import { esSupervisor } from './utils/supervisores';
 import './App.css';
 
 function ProtectedLayout() {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
+  const supervisor = esSupervisor(user.email);
   return (
     <>
       <Navbar />
@@ -25,6 +28,7 @@ function ProtectedLayout() {
           <Route path="/alquileres" element={<Alquileres />} />
           <Route path="/reportes" element={<Reportes />} />
           <Route path="/ayuda" element={<Ayuda />} />
+          <Route path="/mantenimiento" element={supervisor ? <Mantenimiento /> : <Navigate to="/" replace />} />
           <Route path="/sueldos" element={<Sueldos />} />
         </Routes>
       </main>

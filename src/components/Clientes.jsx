@@ -7,42 +7,9 @@ import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt'
 import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
 import { coincideBusqueda } from '../utils/search';
 import { getClientes, upsertClienteCache, removeClienteCache, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
+import { prepararItemsConFotosSeparadas, eliminarFotosDeAlquiler, itemTieneFoto } from '../utils/fotos';
 import FotoModal from './FotoModal';
-
-function esDriveUrl(url) {
-  return url && url.includes('drive.google.com');
-}
-
-function getDriveImageUrl(url) {
-  const match = url && url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? `https://drive.google.com/uc?export=view&id=${match[1]}` : url;
-}
-
-function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let { width, height } = img;
-        if (width > maxAncho || height > maxAncho) {
-          const ratio = Math.min(maxAncho / width, maxAncho / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', calidad));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import FotoItem from './FotoItem';
 
 export default function Clientes() {
   const [search, setSearch] = useState('');
@@ -164,15 +131,8 @@ export default function Clientes() {
 
   const actualizarAlquiler = async (id) => {
     try {
-      const itemsConFotos = [];
-      for (const item of editFormAlquiler.items) {
-        if (item.file) {
-          const b64 = await comprimirImagen(item.file);
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: b64 });
-        } else {
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
-        }
-      }
+      const alqAnterior = historial.find((h) => h.id === id);
+      const itemsConFotos = await prepararItemsConFotosSeparadas(editFormAlquiler.items, id, alqAnterior?.items || []);
       const telCombined = editFormAlquiler.telefonoPrincipal.trim() + (editFormAlquiler.telefonoSecundario.trim() ? ' / ' + editFormAlquiler.telefonoSecundario.trim() : '');
       const data = {
         items: itemsConFotos,
@@ -210,7 +170,9 @@ export default function Clientes() {
 
   const borrarAlquiler = async (id) => {
     if (!window.confirm('¿Eliminar este alquiler?')) return;
+    const alq = historial.find((h) => h.id === id);
     await deleteDoc(doc(db, 'alquileres', id));
+    if (alq) await eliminarFotosDeAlquiler(alq);
     removeAlquilerCache(id);
     if (selected) verHistorial(selected);
   };
@@ -451,14 +413,7 @@ export default function Clientes() {
                 <h4 style={{ marginTop: 12, marginBottom: 8 }}>Items</h4>
                 {(detalleAlquiler.items || []).map((it, idx) => (
                   <div key={idx} className="detalle-item">
-                    {it.fotoUrl && !esDriveUrl(it.fotoUrl) ? (
-                      <img src={it.fotoUrl} alt={it.nombre} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(it.fotoUrl)} />
-                    ) : null}
-                    {it.fotoUrl && esDriveUrl(it.fotoUrl) ? (
-                      <a href={it.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
-                        <img src={getDriveImageUrl(it.fotoUrl)} alt={it.nombre} className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
-                      </a>
-                    ) : null}
+                    <FotoItem item={it} onZoom={setFotoAmpliada} />
                     <div><strong>{it.nombre}</strong>{it.talle ? ` (${it.talle})` : ''}</div>
                   </div>
                 ))}
@@ -566,7 +521,7 @@ export default function Clientes() {
                   <label>Foto</label>
                   <div className="foto-inputs">
                     <label className="btn-foto">
-                      📷 {item.fotoUrl ? 'Cambiar foto' : 'Tomar foto'}
+                      📷 {itemTieneFoto(item) ? 'Cambiar foto' : 'Tomar foto'}
                       <input type="file" accept="image/*" capture="environment" onChange={(e) => {
                         if (e.target.files[0]) {
                           const copy = [...editFormAlquiler.items];
@@ -581,12 +536,7 @@ export default function Clientes() {
                       copy[i] = handleEditFotoUrl(copy[i], e.target.value);
                       setEditFormAlquiler({ ...editFormAlquiler, items: copy });
                     }} placeholder="O pegar URL de imagen..." className="url-input" />
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
-                    {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
-                      <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
-                        <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
-                      </a>
-                    )}
+                    <FotoItem item={item} onZoom={setFotoAmpliada} />
                   </div>
                 </div>
                 <button type="button" className="btn btn-danger btn-small" onClick={() => {

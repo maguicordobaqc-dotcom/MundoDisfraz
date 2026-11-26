@@ -1,37 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, query, where, orderBy, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getWhatsAppReceiptUrl } from '../utils/receipt';
 import { ESTADOS_ALQUILER, ESTADO_DEFAULT, normalizarEstado } from '../utils/estados';
 import { coincideBusqueda } from '../utils/search';
 import { getClientes, upsertClienteCache, upsertAlquilerCache } from '../utils/dataCache';
-
-function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let { width, height } = img;
-        if (width > maxAncho || height > maxAncho) {
-          const ratio = Math.min(maxAncho / width, maxAncho / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', calidad));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import { itemTieneFoto, prepararItemsConFotosSeparadas } from '../utils/fotos';
 
 export default function NuevoAlquiler() {
   const [step, setStep] = useState(1);
@@ -171,15 +146,8 @@ export default function NuevoAlquiler() {
     if (itemsValidos.length === 0) { setError('Agregá al menos un item'); setSubiendo(false); return; }
 
     try {
-      const itemsConFotos = [];
-      for (const item of itemsValidos) {
-        if (item.file) {
-          const b64 = await comprimirImagen(item.file);
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: b64 });
-        } else {
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
-        }
-      }
+      const newAlqRef = doc(collection(db, 'alquileres'));
+      const itemsConFotos = await prepararItemsConFotosSeparadas(itemsValidos, newAlqRef.id);
 
       const nuevoAlquilerData = {
         clienteId: cliente.id,
@@ -205,7 +173,7 @@ export default function NuevoAlquiler() {
         estado,
         createdAt: serverTimestamp()
       };
-      const newAlqRef = await addDoc(collection(db, 'alquileres'), nuevoAlquilerData);
+      await setDoc(newAlqRef, nuevoAlquilerData);
       upsertAlquilerCache(newAlqRef.id, { ...nuevoAlquilerData, createdAt: { seconds: Math.floor(Date.now() / 1000) } }, true);
 
       setExito('¡Alquiler registrado con éxito!');
@@ -398,7 +366,7 @@ export default function NuevoAlquiler() {
 
           <form onSubmit={(e) => {
             e.preventDefault();
-            const sinFoto = items.some((it) => it.nombre.trim() && !it.fotoUrl);
+            const sinFoto = items.some((it) => it.nombre.trim() && !itemTieneFoto(it));
             if (sinFoto && !window.confirm('Hay items sin foto. ¿Continuar igual?')) return;
             setStep(3);
           }}>

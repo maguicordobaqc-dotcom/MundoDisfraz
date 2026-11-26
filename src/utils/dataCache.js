@@ -1,5 +1,6 @@
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
+import { clearFotoCache } from './fotos';
 
 const cache = {
   alquileres: null,
@@ -107,4 +108,5 @@ export function clearAllCache() {
   cache.clientes = null;
   inflightAlquileres = null;
   inflightClientes = null;
+  clearFotoCache();
 }

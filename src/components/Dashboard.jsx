@@ -5,43 +5,10 @@ import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
 import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
 import { getAlquileres, getClientes, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
+import { prepararItemsConFotosSeparadas, eliminarFotosDeAlquiler, itemTieneFoto } from '../utils/fotos';
 import FotoModal from './FotoModal';
+import FotoItem from './FotoItem';
 import { Link } from 'react-router-dom';
-
-function esDriveUrl(url) {
-  return url && url.includes('drive.google.com');
-}
-
-function getDriveImageUrl(url) {
-  const match = url && url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? `https://drive.google.com/uc?export=view&id=${match[1]}` : url;
-}
-
-function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let { width, height } = img;
-        if (width > maxAncho || height > maxAncho) {
-          const ratio = Math.min(maxAncho / width, maxAncho / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', calidad));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
 
 export default function Dashboard() {
   const [stats, setStats] = useState({ clientes: 0, alquileres: 0, reservados: 0, caja: 0, señas: 0 });
@@ -123,15 +90,8 @@ export default function Dashboard() {
 
   const actualizar = async (id) => {
     try {
-      const itemsConFotos = [];
-      for (const item of editForm.items) {
-        if (item.file) {
-          const b64 = await comprimirImagen(item.file);
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: b64 });
-        } else {
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
-        }
-      }
+      const alqAnterior = recientes.find((a) => a.id === id);
+      const itemsConFotos = await prepararItemsConFotosSeparadas(editForm.items, id, alqAnterior?.items || []);
       const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
       const data = {
         items: itemsConFotos,
@@ -171,7 +131,9 @@ export default function Dashboard() {
   const borrar = async (id) => {
     if (!window.confirm('¿Estás seguro de eliminar este alquiler?')) return;
     try {
+      const alq = recientes.find((a) => a.id === id);
       await deleteDoc(doc(db, 'alquileres', id));
+      if (alq) await eliminarFotosDeAlquiler(alq);
       const updated = removeAlquilerCache(id);
       const clientesLista = await getClientes(false);
       if (updated) aplicarDatos(clientesLista, updated);
@@ -292,25 +254,20 @@ export default function Dashboard() {
                   <label>Foto</label>
                   <div className="foto-inputs">
                     <label className="btn-foto">
-                      📷 {item.fotoUrl ? 'Cambiar foto' : 'Tomar foto'}
+                      📷 {itemTieneFoto(item) ? 'Cambiar foto' : 'Tomar foto'}
                       <input type="file" accept="image/*" capture="environment" onChange={(e) => {
                         if (e.target.files[0]) {
                           const reader = new FileReader();
                           reader.onload = (ev) => {
                             const copy = [...editForm.items];
-                            copy[i] = { ...copy[i], file: e.target.files[0], preview: ev.target.result, fotoUrl: ev.target.result };
+                            copy[i] = { ...copy[i], file: e.target.files[0], preview: ev.target.result, fotoUrl: '' };
                             setEditForm({ ...editForm, items: copy });
                           };
                           reader.readAsDataURL(e.target.files[0]);
                         }
                       }} />
                     </label>
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
-                    {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
-                      <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
-                        <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
-                      </a>
-                    )}
+                    <FotoItem item={item} onZoom={setFotoAmpliada} />
                   </div>
                 </div>
                 <button type="button" className="btn btn-danger btn-small" onClick={() => {

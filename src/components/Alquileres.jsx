@@ -6,42 +6,9 @@ import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt'
 import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
 import { coincideBusqueda } from '../utils/search';
 import { getAlquileres, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
+import { prepararItemsConFotosSeparadas, eliminarFotosDeAlquiler, itemTieneFoto } from '../utils/fotos';
 import FotoModal from './FotoModal';
-
-function esDriveUrl(url) {
-  return url && (url.includes('drive.google.com') || url.includes('googleusercontent'));
-}
-
-function getDriveImageUrl(url) {
-  const match = url && url.match(/[-\w]{25,}/);
-  return match ? `https://drive.google.com/thumbnail?id=${match[0]}&sz=w400-h400` : url;
-}
-
-function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let { width, height } = img;
-        if (width > maxAncho || height > maxAncho) {
-          const ratio = Math.min(maxAncho / width, maxAncho / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', calidad));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import FotoItem from './FotoItem';
 
 export default function Alquileres() {
   const [alquileres, setAlquileres] = useState([]);
@@ -100,7 +67,9 @@ export default function Alquileres() {
   const borrar = async (id) => {
     if (!window.confirm('¿Estás seguro de eliminar este alquiler?')) return;
     try {
+      const alq = alquileres.find((a) => a.id === id);
       await deleteDoc(doc(db, 'alquileres', id));
+      if (alq) await eliminarFotosDeAlquiler(alq);
       const updated = removeAlquilerCache(id);
       if (updated) {
         setAlquileres(updated);
@@ -140,15 +109,8 @@ export default function Alquileres() {
 
   const actualizar = async (id) => {
     try {
-      const itemsConFotos = [];
-      for (const item of editForm.items) {
-        if (item.file) {
-          const b64 = await comprimirImagen(item.file);
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: b64 });
-        } else {
-          itemsConFotos.push({ nombre: item.nombre, talle: item.talle, fotoUrl: item.fotoUrl || '' });
-        }
-      }
+      const alqAnterior = alquileres.find((a) => a.id === id);
+      const itemsConFotos = await prepararItemsConFotosSeparadas(editForm.items, id, alqAnterior?.items || []);
       const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
       const data = {
         items: itemsConFotos,
@@ -482,19 +444,12 @@ export default function Alquileres() {
             return (
               <tr key={key}>
                 <td style={{ width: 76 }}>
-                  {it.fotoUrl ? (
-                    <img
-                      src={esDriveUrl(it.fotoUrl) ? getDriveImageUrl(it.fotoUrl) : it.fotoUrl}
-                      alt={it.nombre}
-                      loading="lazy"
-                      className="thumb"
-                      style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'pointer' }}
-                      onClick={() => setFotoAmpliada(it.fotoUrl)}
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                    />
-                  ) : (
-                    <span className="text-muted" style={{ fontSize: '0.8rem' }}>Sin foto</span>
-                  )}
+                  <FotoItem
+                    item={it}
+                    onZoom={setFotoAmpliada}
+                    style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }}
+                    emptyText={it.fotoLimpiada ? 'Archivada' : 'Sin foto'}
+                  />
                 </td>
                 <td>
                   <strong>{it.nombre || 'Sin nombre'}</strong>
@@ -615,12 +570,7 @@ export default function Alquileres() {
           <h4 style={{ marginTop: 12, marginBottom: 8 }}>Items</h4>
           {detalle.items?.map((it, i) => (
             <div key={i} className="detalle-item">
-              {it.fotoUrl && !esDriveUrl(it.fotoUrl) && <img src={it.fotoUrl} alt={it.nombre} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(it.fotoUrl)} />}
-              {it.fotoUrl && esDriveUrl(it.fotoUrl) && (
-                <a href={it.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
-                  <img src={getDriveImageUrl(it.fotoUrl)} alt={it.nombre} className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; }} />
-                </a>
-              )}
+              <FotoItem item={it} onZoom={setFotoAmpliada} />
               <div><strong>{it.nombre}</strong>{it.talle ? ` (${it.talle})` : ''}</div>
             </div>
           ))}
@@ -685,25 +635,20 @@ export default function Alquileres() {
                   <label>Foto</label>
                   <div className="foto-inputs">
                     <label className="btn-foto">
-                      📷 {item.fotoUrl ? 'Cambiar foto' : 'Tomar foto'}
+                      📷 {itemTieneFoto(item) ? 'Cambiar foto' : 'Tomar foto'}
                       <input type="file" accept="image/*" capture="environment" onChange={(e) => {
                         if (e.target.files[0]) {
                           const reader = new FileReader();
                           reader.onload = (ev) => {
                             const copy = [...editForm.items];
-                            copy[i] = { ...copy[i], file: e.target.files[0], preview: ev.target.result, fotoUrl: ev.target.result };
+                            copy[i] = { ...copy[i], file: e.target.files[0], preview: ev.target.result, fotoUrl: '' };
                             setEditForm({ ...editForm, items: copy });
                           };
                           reader.readAsDataURL(e.target.files[0]);
                         }
                       }} />
                     </label>
-                    {(item.preview || item.fotoUrl) && !esDriveUrl(item.preview || item.fotoUrl) && <img src={item.preview || item.fotoUrl} alt="preview" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(item.preview || item.fotoUrl)} />}
-                    {(item.preview || item.fotoUrl) && esDriveUrl(item.preview || item.fotoUrl) && (
-                      <a href={item.preview || item.fotoUrl} target="_blank" rel="noreferrer" title="Abrir en Google Drive">
-                        <img src={getDriveImageUrl(item.preview || item.fotoUrl)} alt="preview" className="thumb" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '📷 Ver en Drive'; e.target.parentElement.className = 'btn btn-small btn-secondary'; }} />
-                      </a>
-                    )}
+                    <FotoItem item={item} onZoom={setFotoAmpliada} />
                   </div>
                 </div>
                 <button type="button" className="btn btn-danger btn-small" onClick={() => {

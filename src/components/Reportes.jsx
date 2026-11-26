@@ -5,14 +5,9 @@ import { coincideBusqueda } from '../utils/search';
 import { getAlquileres } from '../utils/dataCache';
 import { ComposedChart, BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LabelList, Cell } from 'recharts';
 import FotoModal from './FotoModal';
+import FotoItem from './FotoItem';
 
-function esDriveUrl(url) {
-  return url && (url.includes('drive.google.com') || url.includes('googleusercontent'));
-}
-function getDriveImageUrl(url) {
-  const match = url.match(/[-\w]{25,}/);
-  return match ? `https://drive.google.com/thumbnail?id=${match[0]}&sz=w800-h800` : url;
-}
+const tieneFotoOArchivada = (it) => Boolean(it?.fotoId || it?.fotoUrl || it?.fotoLimpiada);
 
 const COLORS = ['#6c63ff', '#ff6584', '#00b894', '#fdcb6e', '#e17055', '#0984e3', '#a29bfe', '#fd79a8', '#00cec9', '#e84393'];
 
@@ -155,7 +150,7 @@ export default function Reportes() {
 
     const colArr = Object.entries(conteoCol).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 
-    const sinFoto = filtrados.filter((a) => (a.items || []).length > 0 && (a.items || []).every((it) => !it.fotoUrl)).length;
+    const sinFoto = filtrados.filter((a) => (a.items || []).length > 0 && (a.items || []).every((it) => !tieneFotoOArchivada(it))).length;
 
     return {
       totalPrecio: precio, totalSeña: seña, saldoPendiente: precio - seña,
@@ -258,7 +253,7 @@ export default function Reportes() {
             <thead><tr><th>Cliente</th><th>Teléfono</th><th>Items</th><th>Fecha Alquiler</th><th>Fecha Devolución</th><th>Seña</th><th onClick={() => setSinFotoSortDir(sinFotoSortDir === 'asc' ? 'desc' : 'asc')} style={{ cursor: 'pointer' }}>Estado {sinFotoSortDir ? (sinFotoSortDir === 'asc' ? '▲' : '▼') : ''}</th></tr></thead>
             <tbody>
               {(() => {
-                const items = filtrados.filter((a) => (a.items || []).length > 0 && (a.items || []).every((it) => !it.fotoUrl));
+                const items = filtrados.filter((a) => (a.items || []).length > 0 && (a.items || []).every((it) => !tieneFotoOArchivada(it)));
                 if (sinFotoSortDir) {
                   items.sort((a, b) => {
                     const va = normalizarEstado(a.estado);
@@ -539,6 +534,8 @@ export default function Reportes() {
                     item: it.nombre,
                     talle: it.talle || '',
                     fotoUrl: it.fotoUrl || '',
+                    fotoId: it.fotoId || '',
+                    fotoLimpiada: Boolean(it.fotoLimpiada),
                     cliente: a.clienteNombre,
                     telefono: a.clienteTelefonoPrincipal || a.clienteTelefono?.split(' / ')[0] || '',
                     fecha: a.fechaAlquiler,
@@ -557,10 +554,7 @@ export default function Reportes() {
                   {resultados.map((r) => (
                     <tr key={r.key}>
                       <td>{r.item}{r.talle ? ` (${r.talle})` : ''}</td>
-                      <td>{r.fotoUrl && !esDriveUrl(r.fotoUrl) ? <img src={r.fotoUrl} alt={r.item} loading="lazy" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
-                        {r.fotoUrl && esDriveUrl(r.fotoUrl) ? <img src={getDriveImageUrl(r.fotoUrl)} alt={r.item} loading="lazy" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
-                        {!r.fotoUrl ? <span className="text-muted">—</span> : null}
-                      </td>
+                      <td><FotoItem item={{ nombre: r.item, fotoUrl: r.fotoUrl, fotoId: r.fotoId }} onZoom={setFotoAmpliada} emptyText={r.fotoLimpiada ? 'Archivada' : '—'} /></td>
                       <td>{r.cliente}</td>
                       <td>{r.telefono ? <a href={`https://wa.me/54${r.telefono.replace(/[^0-9]/g, '')}`} target="_blank" rel="noreferrer">📞 {r.telefono}</a> : '-'}</td>
                       <td><span className={`badge badge-${r.estado}`}>{r.estado}</span></td>

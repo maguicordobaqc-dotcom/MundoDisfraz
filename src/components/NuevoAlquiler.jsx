@@ -43,6 +43,8 @@ export default function NuevoAlquiler() {
   const [fechaAlquiler, setFechaAlquiler] = useState('');
   const [fechaEvento, setFechaEvento] = useState('');
   const [fechaDevolucion, setFechaDevolucion] = useState('');
+  const [fechaRetiro, setFechaRetiro] = useState('');
+  const [horaRetiro, setHoraRetiro] = useState('');
   const [turno, setTurno] = useState('mañana');
   const [colegio, setColegio] = useState('');
   const [precio, setPrecio] = useState('17000');
@@ -191,6 +193,8 @@ export default function NuevoAlquiler() {
         fechaAlquiler,
         fechaEvento,
         fechaDevolucion,
+        fechaRetiro,
+        horaRetiro: horaRetiro.trim(),
         turno,
         colegio,
         precio: Number(precio),
@@ -214,6 +218,8 @@ export default function NuevoAlquiler() {
         fechaAlquiler,
         fechaEvento,
         fechaDevolucion,
+        fechaRetiro,
+        horaRetiro: horaRetiro.trim(),
         turno,
         colegio,
         precio,
@@ -230,7 +236,7 @@ export default function NuevoAlquiler() {
         });
       }
       setStep(1); setCliente(null); setItems([{ nombre: '', talle: '', file: null, preview: '', fotoUrl: '' }]);
-      setFechaAlquiler(''); setFechaEvento(''); setFechaDevolucion(''); setTurno('mañana'); setColegio('');
+      setFechaAlquiler(''); setFechaEvento(''); setFechaDevolucion(''); setFechaRetiro(''); setHoraRetiro(''); setTurno('mañana'); setColegio('');
       setPrecio('17000'); setSeña('0'); setGarantia(''); setGarantiaDevuelta(false); setNota(''); setEstado(ESTADO_DEFAULT);
       setSearchApe(''); setClientes([]); setBusco(false);
       setTimeout(() => setExito(''), 4000);
@@ -481,6 +487,16 @@ export default function NuevoAlquiler() {
                 </label>
               </div>
             </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Fecha que retira (si reserva para otro día)</label>
+                <input type="date" value={fechaRetiro} onChange={(e) => setFechaRetiro(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Hora de retiro (opcional)</label>
+                <input value={horaRetiro} onChange={(e) => setHoraRetiro(e.target.value)} placeholder="Ej: 17:30 o de 17 a 19 hs" />
+              </div>
+            </div>
             <div className="form-group">
               <label>Nota adicional</label>
               <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={2} />
@@ -511,6 +527,9 @@ export default function NuevoAlquiler() {
           <ul>{items.map((i, idx) => <li key={idx}>{i.nombre}{i.talle ? ` (Talle: ${i.talle})` : ''}</li>)}</ul>
           <p><strong>Precio:</strong> ${precio} | <strong>Seña:</strong> ${seña || '0'}</p>
           {garantia && <p><strong>Garantía:</strong> {garantia} {garantiaDevuelta ? '✅ Devuelta' : '❌ Pendiente'}</p>}
+          {(fechaRetiro || horaRetiro.trim()) && (
+            <p><strong>Retiro del disfraz:</strong> {[fechaRetiro, horaRetiro.trim()].filter(Boolean).join(' - ')}</p>
+          )}
           {nota && <p><strong>Nota:</strong> {nota}</p>}
           <p><strong>Estado:</strong> <span className={`badge badge-${estado}`}>{estado}</span></p>
 

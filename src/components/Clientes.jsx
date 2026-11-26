@@ -147,6 +147,8 @@ export default function Clientes() {
       fechaAlquiler: a.fechaAlquiler || '',
       fechaEvento: a.fechaEvento || '',
       fechaDevolucion: a.fechaDevolucion || '',
+      fechaRetiro: a.fechaRetiro || '',
+      horaRetiro: a.horaRetiro || '',
       turno: a.turno || 'mañana',
       colegio: a.colegio || '',
       telefonoPrincipal: a.clienteTelefonoPrincipal || partes[0] || '',
@@ -180,6 +182,8 @@ export default function Clientes() {
         fechaAlquiler: editFormAlquiler.fechaAlquiler,
         fechaEvento: editFormAlquiler.fechaEvento,
         fechaDevolucion: editFormAlquiler.fechaDevolucion,
+        fechaRetiro: editFormAlquiler.fechaRetiro || '',
+        horaRetiro: (editFormAlquiler.horaRetiro || '').trim(),
         turno: editFormAlquiler.turno,
         colegio: editFormAlquiler.colegio,
         precio: Number(editFormAlquiler.precio),
@@ -441,6 +445,9 @@ export default function Clientes() {
                 <p><strong>Fecha:</strong> {detalleAlquiler.fechaAlquiler} {detalleAlquiler.turno ? `| Turno: ${detalleAlquiler.turno}` : ''} {detalleAlquiler.colegio ? `| Colegio: ${detalleAlquiler.colegio}` : ''}</p>
                 {detalleAlquiler.fechaEvento && <p><strong>Evento:</strong> {detalleAlquiler.fechaEvento}</p>}
                 {detalleAlquiler.fechaDevolucion && <p><strong>Devolución:</strong> {detalleAlquiler.fechaDevolucion}</p>}
+                {(detalleAlquiler.fechaRetiro || detalleAlquiler.horaRetiro) && (
+                  <p><strong>Retiro del disfraz:</strong> {[detalleAlquiler.fechaRetiro, detalleAlquiler.horaRetiro].filter(Boolean).join(' - ')}</p>
+                )}
                 <h4 style={{ marginTop: 12, marginBottom: 8 }}>Items</h4>
                 {(detalleAlquiler.items || []).map((it, idx) => (
                   <div key={idx} className="detalle-item">
@@ -605,6 +612,16 @@ export default function Clientes() {
               <div className="form-group">
                 <label>Fecha Devolución</label>
                 <input type="date" value={editFormAlquiler.fechaDevolucion} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, fechaDevolucion: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Fecha que retira (opcional)</label>
+                <input type="date" value={editFormAlquiler.fechaRetiro || ''} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, fechaRetiro: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Hora de retiro (opcional)</label>
+                <input value={editFormAlquiler.horaRetiro || ''} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, horaRetiro: e.target.value })} placeholder="Ej: 17:30 o de 17 a 19 hs" />
               </div>
             </div>
             <div className="form-row">

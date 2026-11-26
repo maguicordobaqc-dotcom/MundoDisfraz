@@ -1,8 +1,19 @@
 import { normalizarEstado } from './estados';
 
+function formatFechaAR(fecha) {
+  if (!fecha) return '';
+  const m = String(fecha).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : fecha;
+}
+
 export function getWhatsAppReceiptUrl(alquiler) {
   if (!alquiler?.clienteTelefono && !alquiler?.clienteTelefonoPrincipal) return null;
   const saldo = (Number(alquiler.precio) || 0) - (Number(alquiler.seña) || 0);
+  const retiroPartes = [
+    alquiler.fechaRetiro ? formatFechaAR(alquiler.fechaRetiro) : '',
+    alquiler.horaRetiro ? String(alquiler.horaRetiro).trim() : '',
+  ].filter(Boolean);
+  const retiroLinea = retiroPartes.length > 0 ? `*Retiro del disfraz:* ${retiroPartes.join(' - ')}\n` : '';
   const txt = `🎭 *MUNDO DISFRAZ - Comprobante*\n\n` +
     `Cliente: ${alquiler.clienteNombre}\n` +
     `Fecha: ${alquiler.fechaAlquiler}${alquiler.turno ? ` (${alquiler.turno})` : ''}\n` +
@@ -13,12 +24,11 @@ export function getWhatsAppReceiptUrl(alquiler) {
     `Precio Alquiler: $${alquiler.precio}\n` +
     `Seña: $${alquiler.seña || '0'}\n` +
     `${alquiler.garantia ? `Garantía: ${alquiler.garantia}\n` : ''}` +
-    `${Number(alquiler.seña) > 0 ? `Saldo a Pagar: $${saldo}\n\n` : '\n'}` +
-    `*La seña no se devuelve.*\n` +
+    `${Number(alquiler.seña) > 0 ? `Saldo a Pagar: $${saldo}\n` : ''}` +
+    `${retiroLinea}\n` +
     `*Los disfraces se devuelven lavados, caso contrario se descuenta el importe del lavado.*\n` +
     `*En fechas patrias, los disfraces se devuelven finalizado el acto.*\n` +
     `*Se cobrará el valor total del alquiler por cada día de atraso.*\n` +
-    `*El depósito ni la seña se devuelven.*\n` +
     `*Garantía solo en Efectivo*\n\n` +
     `MUNDO DISFRAZ\n` +
     `Avda Perón 2550 - Tel: 3814143161`;

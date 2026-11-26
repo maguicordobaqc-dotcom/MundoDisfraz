@@ -106,6 +106,8 @@ export default function Dashboard() {
       fechaAlquiler: a.fechaAlquiler || '',
       fechaEvento: a.fechaEvento || '',
       fechaDevolucion: a.fechaDevolucion || '',
+      fechaRetiro: a.fechaRetiro || '',
+      horaRetiro: a.horaRetiro || '',
       turno: a.turno || 'mañana',
       colegio: a.colegio || '',
       telefonoPrincipal: a.clienteTelefonoPrincipal || partes[0] || '',
@@ -139,6 +141,8 @@ export default function Dashboard() {
         fechaAlquiler: editForm.fechaAlquiler,
         fechaEvento: editForm.fechaEvento,
         fechaDevolucion: editForm.fechaDevolucion,
+        fechaRetiro: editForm.fechaRetiro || '',
+        horaRetiro: (editForm.horaRetiro || '').trim(),
         turno: editForm.turno,
         colegio: editForm.colegio,
         precio: Number(editForm.precio),
@@ -332,6 +336,16 @@ export default function Dashboard() {
               <div className="form-group">
                 <label>Fecha Devolución</label>
                 <input type="date" value={editForm.fechaDevolucion} onChange={(e) => setEditForm({ ...editForm, fechaDevolucion: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Fecha que retira (opcional)</label>
+                <input type="date" value={editForm.fechaRetiro || ''} onChange={(e) => setEditForm({ ...editForm, fechaRetiro: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Hora de retiro (opcional)</label>
+                <input value={editForm.horaRetiro || ''} onChange={(e) => setEditForm({ ...editForm, horaRetiro: e.target.value })} placeholder="Ej: 17:30 o de 17 a 19 hs" />
               </div>
             </div>
             <div className="form-row">

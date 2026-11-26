@@ -1,3 +1,5 @@
+import { normalizarEstado } from './estados';
+
 export function getWhatsAppReceiptUrl(alquiler) {
   if (!alquiler?.clienteTelefono && !alquiler?.clienteTelefonoPrincipal) return null;
   const saldo = (Number(alquiler.precio) || 0) - (Number(alquiler.seña) || 0);
@@ -27,7 +29,7 @@ export function getWhatsAppReceiptUrl(alquiler) {
 export function getWhatsAppReminderUrl(alquiler) {
   if (!alquiler?.clienteTelefono && !alquiler?.clienteTelefonoPrincipal) return null;
   if (!alquiler.fechaDevolucion) return null;
-  if (alquiler.estado !== 'entregado' && alquiler.estado !== 'retirado') return null;
+  if (normalizarEstado(alquiler.estado) !== 'retirado') return null;
   const hoy = new Date();
   const dev = new Date(alquiler.fechaDevolucion);
   const dias = Math.floor((hoy - dev) / (1000 * 60 * 60 * 24));

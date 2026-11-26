@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, limit, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
+import { getAlquileres, getClientes, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
 import FotoModal from './FotoModal';
 import { Link } from 'react-router-dom';
 
@@ -42,37 +44,58 @@ function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
 }
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({ clientes: 0, alquileres: 0, pendientes: 0, caja: 0, señas: 0 });
+  const [stats, setStats] = useState({ clientes: 0, alquileres: 0, reservados: 0, caja: 0, señas: 0 });
   const [recientes, setRecientes] = useState([]);
   const [editando, setEditando] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [fotoAmpliada, setFotoAmpliada] = useState(null);
+  const [cargando, setCargando] = useState(true);
 
-
-  const cargar = async () => {
-    const cl = (await getDocs(collection(db, 'clientes'))).size;
-    const alq = await getDocs(collection(db, 'alquileres'));
-    const total = alq.size;
-    const docs = alq.docs.map((d) => d.data());
-    const pend = docs.filter((d) => d.estado === 'pendiente').length;
-    const caja = docs.reduce((s, d) => s + (Number(d.precio) || 0), 0);
-    const señas = docs.reduce((s, d) => s + (Number(d.seña) || 0), 0);
-
-    const q = query(collection(db, 'alquileres'), orderBy('createdAt', 'desc'), limit(5));
-    const snap = await getDocs(q);
-    setRecientes(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    setStats({ clientes: cl, alquileres: total, pendientes: pend, caja, señas });
+  const aplicarDatos = (clientesLista, alquileresLista) => {
+    const total = alquileresLista.length;
+    const res = alquileresLista.filter((d) => normalizarEstado(d.estado) === 'reservado').length;
+    const caja = alquileresLista.reduce((s, d) => s + (Number(d.precio) || 0), 0);
+    const señas = alquileresLista.reduce((s, d) => s + (Number(d.seña) || 0), 0);
+    setRecientes(alquileresLista.slice(0, 5));
+    setStats({ clientes: clientesLista.length, alquileres: total, reservados: res, caja, señas });
   };
 
-  useEffect(() => { cargar(); }, []);
+  const cargar = async (force = false) => {
+    setCargando(true);
+    setErr('');
+    try {
+      const [clientesLista, alquileresLista] = await Promise.all([
+        getClientes(force),
+        getAlquileres(force),
+      ]);
+      aplicarDatos(clientesLista, alquileresLista);
+    } catch (e) {
+      setErr('Error al cargar datos: ' + e.message);
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  useEffect(() => { cargar(false); }, []);
 
   useEffect(() => { setTimeout(initTopScrollbar, 300); }, [recientes]);
 
-  const cambiarEstado = async (id, nuevoEstado) => {
-    await updateDoc(doc(db, 'alquileres', id), { estado: nuevoEstado });
-    cargar();
+  const cambiarEstado = async (id, nuevoEstado, alquiler) => {
+    const data = { estado: nuevoEstado };
+    if (nuevoEstado === 'devuelto' && alquiler?.garantia && !alquiler.garantiaDevuelta) {
+      data.garantiaDevuelta = true;
+    }
+    try {
+      await updateDoc(doc(db, 'alquileres', id), data);
+      const updated = upsertAlquilerCache(id, data);
+      const clientesLista = await getClientes(false);
+      if (updated) aplicarDatos(clientesLista, updated);
+    } catch (e) {
+      setErr('Error al cambiar estado: ' + e.message);
+      setTimeout(() => setErr(''), 5000);
+    }
   };
 
   const abrirEditar = (a) => {
@@ -92,7 +115,7 @@ export default function Dashboard() {
       garantia: a.garantia || '',
       garantiaDevuelta: a.garantiaDevuelta || false,
       nota: a.nota || '',
-      estado: a.estado || 'pendiente',
+      estado: normalizarEstado(a.estado),
     });
   };
 
@@ -129,10 +152,12 @@ export default function Dashboard() {
         data.garantiaDevuelta = true;
       }
       await updateDoc(doc(db, 'alquileres', id), data);
+      const updated = upsertAlquilerCache(id, data);
+      const clientesLista = await getClientes(false);
+      if (updated) aplicarDatos(clientesLista, updated);
       setEditando(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
-      cargar();
     } catch (e) {
       setErr('Error al guardar: ' + e.message);
       setTimeout(() => setErr(''), 5000);
@@ -141,20 +166,32 @@ export default function Dashboard() {
 
   const borrar = async (id) => {
     if (!window.confirm('¿Estás seguro de eliminar este alquiler?')) return;
-    await deleteDoc(doc(db, 'alquileres', id));
-    setEditando(null);
-    cargar();
+    try {
+      await deleteDoc(doc(db, 'alquileres', id));
+      const updated = removeAlquilerCache(id);
+      const clientesLista = await getClientes(false);
+      if (updated) aplicarDatos(clientesLista, updated);
+      setEditando(null);
+    } catch (e) {
+      setErr('Error al eliminar: ' + e.message);
+      setTimeout(() => setErr(''), 5000);
+    }
   };
 
   return (
     <div className="dashboard">
-      <h2>Panel Principal</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Panel Principal</h2>
+        <button onClick={() => cargar(true)} className="btn btn-secondary btn-small" disabled={cargando}>
+          {cargando ? 'Cargando...' : '🔄 Actualizar'}
+        </button>
+      </div>
       {msg && <div className="alert alert-success">{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
       <div className="stats">
         <div className="stat-card"><span className="stat-num">{stats.clientes}</span>Clientes</div>
         <div className="stat-card"><span className="stat-num">{stats.alquileres}</span>Alquileres</div>
-        <div className="stat-card warn"><span className="stat-num">{stats.pendientes}</span>Pendientes</div>
+        <div className="stat-card warn"><span className="stat-num">{stats.reservados}</span>Reservados</div>
         <div className="stat-card"><span className="stat-num">${stats.caja.toLocaleString()}</span>Total Caja</div>
         <div className="stat-card"><span className="stat-num">${stats.señas.toLocaleString()}</span>Total Señas</div>
       </div>
@@ -175,18 +212,16 @@ export default function Dashboard() {
                   <td>{r.clienteTelefonoPrincipal || r.clienteTelefono?.split(' / ')[0] || ''}{r.clienteTelefonoSecundario ? ` / ${r.clienteTelefonoSecundario}` : r.clienteTelefono?.includes(' / ') ? ` / ${r.clienteTelefono.split(' / ')[1]}` : ''}</td>
                   <td>{r.fechaAlquiler}</td>
                   <td>${r.precio}</td>
-                  <td><span className={`badge badge-${r.estado}`}>{r.estado}</span></td>
+                  <td><span className={`badge badge-${normalizarEstado(r.estado)}`}>{normalizarEstado(r.estado)}</span></td>
                   <td>
                     <select
-                      value={r.estado}
-                      onChange={(e) => cambiarEstado(r.id, e.target.value)}
+                      value={normalizarEstado(r.estado)}
+                      onChange={(e) => cambiarEstado(r.id, e.target.value, r)}
                       className="estado-select"
                     >
-                      <option value="pendiente">Pendiente</option>
-                      <option value="reservado">Reservado</option>
-                      <option value="retirado">Retirado</option>
-                      <option value="entregado">Entregado</option>
-                      <option value="devuelto">Devuelto</option>
+                      {ESTADOS_ALQUILER.map((e) => (
+                        <option key={e.value} value={e.value}>{e.label}</option>
+                      ))}
                     </select>
                   </td>
                   <td>
@@ -223,11 +258,9 @@ export default function Dashboard() {
               <div className="form-group">
                 <label>Estado</label>
                 <select value={editForm.estado} onChange={(e) => setEditForm({ ...editForm, estado: e.target.value })}>
-                  <option value="pendiente">Pendiente</option>
-                  <option value="reservado">Reservado</option>
-                  <option value="retirado">Retirado</option>
-                  <option value="entregado">Entregado</option>
-                  <option value="devuelto">Devuelto</option>
+                  {ESTADOS_ALQUILER.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
+                  ))}
                 </select>
               </div>
             </div>

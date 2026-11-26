@@ -97,7 +97,7 @@ export default function Ayuda() {
       <div className="help-section">
         <h3>📊 Dashboard</h3>
         <ul>
-          <li>Tarjetas con estadísticas: Clientes, Alquileres, Pendientes, Total Caja, Total Señas</li>
+          <li>Tarjetas con estadísticas: Clientes, Alquileres, Reservados, Total Caja, Total Señas</li>
           <li>Lista de últimos alquileres con teléfono visible (principal/secundario) y cambio rápido de estado</li>
           <li>Botón WhatsApp comprobante y recordatorio fuera de término (⚠️) en cada fila</li>
           <li>✏️ Editar: modal con todos los datos incluyendo fotos, teléfono (dos campos) y estado</li>
@@ -142,7 +142,7 @@ export default function Ayuda() {
           <li>Foto: también pegar imagen (Ctrl+V) o pegar URL</li>
           <li>Fecha de Alquiler, Fecha del Evento, Fecha de Devolución, Turno, Colegio</li>
           <li>Precio (default $17000), Seña (default $0), Garantía + checkbox "Garantía devuelta", Nota</li>
-          <li>Selector de <strong>Estado</strong> (pendiente, reservado, retirado, entregado)</li>
+          <li>Selector de <strong>Estado</strong> (reservado, retirado, devuelto)</li>
           <li>Muestra historial de alquileres del cliente seleccionado</li>
         </ul>
         <h4>Paso 3 — Confirmar</h4>
@@ -164,8 +164,8 @@ export default function Ayuda() {
       <div className="help-section">
         <h3>📋 Alquileres</h3>
         <ul>
-          <li>Lista completa con <strong>búsqueda por nombre de cliente</strong></li>
-          <li>Pestañas de filtro: Todos, Pendiente, Retirado, Entregado, Devuelto, Reservado</li>
+          <li>Lista completa con <strong>búsqueda flexible por cliente</strong> (sin importar tildes, comas ni orden) y modo <strong>🎭 Por Disfraz</strong> con fotos visibles para ver quién se llevó cada disfraz</li>
+          <li>Pestañas de filtro: Todos, Reservado, Retirado, Devuelto</li>
           <li>Filtro por <strong>fecha de devolución</strong></li>
           <li>Columnas <strong>ordenables</strong>: Cliente, Fecha/Turno, Precio, Estado</li>
           <li>Cambiar estado desde un menú desplegable en cada fila</li>

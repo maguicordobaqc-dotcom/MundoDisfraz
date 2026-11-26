@@ -143,7 +143,7 @@ body {
 .badge-entregado { background: #b2dfdb; color: #004d40; }
 .badge-devuelto { background: #d4edda; color: #155724; }
 .badge-reservado { background: #ffeaa7; color: #856404; }
-.badge-retirado { background: #dfe6e9; color: #2d3436; }
+.badge-retirado { background: #cfe2ff; color: #084298; }
 
 /* Dashboard */
 .dashboard h2 { margin-bottom: 20px; }

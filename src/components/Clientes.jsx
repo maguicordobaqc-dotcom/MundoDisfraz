@@ -4,6 +4,9 @@ import { collection, query, where, orderBy, getDocs, addDoc, updateDoc, deleteDo
 import { db } from '../firebase';
 import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
+import { coincideBusqueda } from '../utils/search';
+import { getClientes, upsertClienteCache, removeClienteCache, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
 import FotoModal from './FotoModal';
 
 function esDriveUrl(url) {
@@ -60,28 +63,31 @@ export default function Clientes() {
   const [editFormAlquiler, setEditFormAlquiler] = useState({});
   const [detalleAlquiler, setDetalleAlquiler] = useState(null);
   const [fotoAmpliada, setFotoAmpliada] = useState(null);
+  const [buscando, setBuscando] = useState(false);
 
   useEffect(() => { setTimeout(initTopScrollbar, 300); }, [resultados, showHistorial]);
 
   useEffect(() => { if (showHistorial && selected) { setTimeout(() => { document.getElementById('historial-cliente')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300); } }, [showHistorial, selected]);
 
-  const buscar = async () => {
-    const q = search.trim()
-      ? query(
-          collection(db, 'clientes'),
-          where('apellidoSearch', '>=', search.trim().toLowerCase()),
-          where('apellidoSearch', '<=', search.trim().toLowerCase() + '\uf8ff')
-        )
-      : query(collection(db, 'clientes'), orderBy('apellidoSearch', 'asc'));
-    const snap = await getDocs(q);
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    data.sort((a, b) => (a.apellido || '').localeCompare(b.apellido || ''));
-    setResultados(data);
-    setSelected(null);
-    setHistorial([]);
-    setShowHistorial(false);
-    setDetalleAlquiler(null);
-    if (search.trim()) setForm((f) => ({ ...f, apellido: search.trim() }));
+  const buscar = async (force = false) => {
+    setBuscando(true);
+    setErr('');
+    try {
+      const todos = await getClientes(force);
+      const filtrados = search.trim()
+        ? todos.filter((c) => coincideBusqueda(search, [c.apellido, c.nombre, c.telefono, c.telefonoPrincipal, c.telefonoSecundario]))
+        : todos;
+      setResultados(filtrados);
+      setSelected(null);
+      setHistorial([]);
+      setShowHistorial(false);
+      setDetalleAlquiler(null);
+      if (search.trim()) setForm((f) => ({ ...f, apellido: search.trim() }));
+    } catch (e) {
+      setErr('Error al buscar clientes: ' + e.message);
+    } finally {
+      setBuscando(false);
+    }
   };
 
   useEffect(() => { if (!search) { setResultados([]); setHistorial([]); } }, [search]);
@@ -89,18 +95,20 @@ export default function Clientes() {
   const crearCliente = async (e) => {
     e.preventDefault();
     const telCombined = form.telefonoPrincipal.trim() + (form.telefonoSecundario.trim() ? ' / ' + form.telefonoSecundario.trim() : '');
-    const ref = await addDoc(collection(db, 'clientes'), {
+    const nuevoData = {
       ...form,
       telefono: telCombined,
       apellidoSearch: (form.apellido || '').toLowerCase(),
       nombreSearch: (form.nombre || '').toLowerCase(),
       createdAt: serverTimestamp()
-    });
+    };
+    const ref = await addDoc(collection(db, 'clientes'), nuevoData);
+    upsertClienteCache(ref.id, nuevoData, true);
     setMsg('Cliente creado correctamente');
     setNuevoClienteId(ref.id);
     setShowForm(false);
     setForm({ nombre: '', apellido: '', direccion: '', telefonoPrincipal: '381', telefonoSecundario: '' });
-    buscar();
+    buscar(false);
   };
 
   const limpiarNuevoCliente = () => {
@@ -148,7 +156,7 @@ export default function Clientes() {
       garantia: a.garantia || '',
       garantiaDevuelta: a.garantiaDevuelta || false,
       nota: a.nota || '',
-      estado: a.estado || 'pendiente',
+      estado: normalizarEstado(a.estado),
     });
   };
 
@@ -185,6 +193,7 @@ export default function Clientes() {
         data.garantiaDevuelta = true;
       }
       await updateDoc(doc(db, 'alquileres', id), data);
+      upsertAlquilerCache(id, data);
       setEditandoAlquiler(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
@@ -198,6 +207,7 @@ export default function Clientes() {
   const borrarAlquiler = async (id) => {
     if (!window.confirm('¿Eliminar este alquiler?')) return;
     await deleteDoc(doc(db, 'alquileres', id));
+    removeAlquilerCache(id);
     if (selected) verHistorial(selected);
   };
 
@@ -226,7 +236,7 @@ export default function Clientes() {
 
   const guardarEdicion = async () => {
     const telCombined = editForm.telefonoPrincipal.trim() + (editForm.telefonoSecundario.trim() ? ' / ' + editForm.telefonoSecundario.trim() : '');
-    await updateDoc(doc(db, 'clientes', editando), {
+    const data = {
       nombre: editForm.nombre,
       apellido: editForm.apellido,
       direccion: editForm.direccion,
@@ -235,10 +245,12 @@ export default function Clientes() {
       telefono: telCombined,
       apellidoSearch: (editForm.apellido || '').toLowerCase(),
       nombreSearch: (editForm.nombre || '').toLowerCase(),
-    });
+    };
+    await updateDoc(doc(db, 'clientes', editando), data);
+    upsertClienteCache(editando, data);
     setEditando(null);
     setMsg('Cliente actualizado');
-    buscar();
+    buscar(false);
     setTimeout(() => setMsg(''), 3000);
   };
 
@@ -282,8 +294,9 @@ export default function Clientes() {
       }
       if (!window.confirm(`¿Eliminar a ${c.apellido?.toUpperCase()}, ${c.nombre}?`)) return;
       await deleteDoc(doc(db, 'clientes', c.id));
+      removeClienteCache(c.id);
       setMsg('Cliente eliminado');
-      buscar();
+      buscar(false);
       setTimeout(() => setMsg(''), 3000);
     } catch (err) {
       console.error('Error al borrar cliente:', err);
@@ -293,19 +306,26 @@ export default function Clientes() {
 
   return (
     <div className="page">
-      <h2>Clientes</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Clientes</h2>
+        <button onClick={() => buscar(true)} className="btn btn-secondary btn-small" disabled={buscando}>
+          {buscando ? 'Cargando...' : '🔄 Actualizar'}
+        </button>
+      </div>
       {msg && <div className="alert alert-success">{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
 
       <div className="search-box">
         <input
           type="text"
-          placeholder="Buscar por apellido..."
+          placeholder="Buscar por apellido, nombre o teléfono..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && buscar()}
+          onKeyDown={(e) => e.key === 'Enter' && buscar(false)}
         />
-        <button onClick={buscar} className="btn btn-primary">Buscar</button>
+        <button onClick={() => buscar(false)} className="btn btn-primary" disabled={buscando}>
+          {buscando ? 'Buscando...' : 'Buscar'}
+        </button>
         <button onClick={() => setShowForm(!showForm)} className="btn btn-secondary">
           {showForm ? 'Cancelar' : '+ Nuevo Cliente'}
         </button>
@@ -402,7 +422,7 @@ export default function Clientes() {
                     <td>{h.fechaEvento || '-'}</td>
                     <td>{(h.items || []).map((i) => i.nombre).join(', ')}</td>
                     <td>${h.precio}</td>
-                    <td><span className={`badge badge-${h.estado}`}>{h.estado}</span></td>
+                    <td><span className={`badge badge-${normalizarEstado(h.estado)}`}>{normalizarEstado(h.estado)}</span></td>
                     <td>
                       <button onClick={(e) => { e.stopPropagation(); abrirEditarAlquiler(h); }} className="btn btn-small btn-secondary" title="Editar">✏️</button>
                       <button onClick={(e) => { e.stopPropagation(); borrarAlquiler(h.id); }} className="btn btn-small btn-danger" style={{ marginLeft: 4 }} title="Eliminar">🗑️</button>
@@ -509,11 +529,9 @@ export default function Clientes() {
               <div className="form-group">
                 <label>Estado</label>
                 <select value={editFormAlquiler.estado} onChange={(e) => setEditFormAlquiler({ ...editFormAlquiler, estado: e.target.value })}>
-                  <option value="pendiente">Pendiente</option>
-                  <option value="reservado">Reservado</option>
-                  <option value="retirado">Retirado</option>
-                  <option value="entregado">Entregado</option>
-                  <option value="devuelto">Devuelto</option>
+                  {ESTADOS_ALQUILER.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
+                  ))}
                 </select>
               </div>
             </div>

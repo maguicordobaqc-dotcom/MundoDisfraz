@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
 import { initTopScrollbar } from '../utils/topScrollbar';
+import { normalizarEstado } from '../utils/estados';
+import { coincideBusqueda } from '../utils/search';
+import { getAlquileres } from '../utils/dataCache';
 import { ComposedChart, BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LabelList, Cell } from 'recharts';
 import FotoModal from './FotoModal';
 
@@ -49,12 +50,20 @@ export default function Reportes() {
   const [sinFotoSortDir, setSinFotoSortDir] = useState(null);
   const [garPendSortDir, setGarPendSortDir] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, 'alquileres'));
-      setAlquileres(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  const cargarReportes = async (force = false) => {
+    setLoading(true);
+    try {
+      const data = await getAlquileres(force);
+      setAlquileres(data);
+    } catch (e) {
+      console.error('Error al cargar reportes:', e);
+    } finally {
       setLoading(false);
-    })();
+    }
+  };
+
+  useEffect(() => {
+    cargarReportes(false);
   }, []);
 
   useEffect(() => { if (!loading) setTimeout(initTopScrollbar, 300); }, [loading, graficoActivo]);
@@ -105,7 +114,7 @@ export default function Reportes() {
         precio: a.precio,
         seña: a.seña,
         fecha: a.fechaAlquiler,
-        estado: a.estado || '—',
+        estado: normalizarEstado(a.estado),
         garantiaDevuelta: a.garantiaDevuelta || false,
       }))
       .sort((a, b) => a.apellido.localeCompare(b.apellido) || a.nombre.localeCompare(b.nombre));
@@ -209,7 +218,12 @@ export default function Reportes() {
 
   return (
     <div className="page">
-      <h2>Reportes</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Reportes</h2>
+        <button onClick={() => cargarReportes(true)} className="btn btn-secondary btn-small" disabled={loading}>
+          {loading ? 'Cargando...' : '🔄 Actualizar'}
+        </button>
+      </div>
 
       <div className="card">
         <div className="form-row">
@@ -247,12 +261,14 @@ export default function Reportes() {
                 const items = filtrados.filter((a) => (a.items || []).length > 0 && (a.items || []).every((it) => !it.fotoUrl));
                 if (sinFotoSortDir) {
                   items.sort((a, b) => {
-                    const va = (a.estado || '').toLowerCase();
-                    const vb = (b.estado || '').toLowerCase();
+                    const va = normalizarEstado(a.estado);
+                    const vb = normalizarEstado(b.estado);
                     return sinFotoSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
                   });
                 }
-                return items.map((a) => (
+                return items.map((a) => {
+                  const est = normalizarEstado(a.estado);
+                  return (
                   <tr key={a.id}>
                     <td>{a.clienteApellido}, {a.clienteNombre}</td>
                     <td>{a.clienteTelefonoPrincipal || (a.clienteTelefono || '').split(' / ')[0] || '-'}</td>
@@ -260,9 +276,10 @@ export default function Reportes() {
                     <td>{a.fechaAlquiler || '-'}</td>
                     <td>{a.fechaDevolucion || '-'}</td>
                     <td>{a.seña != null ? '$' + Number(a.seña).toLocaleString() : '-'}</td>
-                    <td><span className={`estado-badge ${(a.estado || 'pendiente').toLowerCase()}`}>{a.estado || 'pendiente'}</span></td>
+                    <td><span className={`badge badge-${est}`}>{est}</span></td>
                   </tr>
-                ));
+                  );
+                });
               })()}
             </tbody>
           </table>
@@ -507,19 +524,17 @@ export default function Reportes() {
           <h3>Buscar Disfraz</h3>
           <div className="form-row">
             <div className="form-group">
-              <input value={buscarDisfraz} onChange={(e) => setBuscarDisfraz(e.target.value)} placeholder="Escribí parte del nombre del disfraz..." style={{ width: '100%' }} />
+              <input value={buscarDisfraz} onChange={(e) => setBuscarDisfraz(e.target.value)} placeholder="Escribí parte del nombre del disfraz (sin importar tildes)..." style={{ width: '100%' }} />
             </div>
           </div>
           {buscarDisfraz.trim().length >= 2 && (() => {
-            const q = buscarDisfraz.trim().toLowerCase();
             const resultados = [];
-            const vistos = new Set();
             filtrados.forEach((a) => {
-              (a.items || []).forEach((it) => {
-                if ((it.nombre || '').toLowerCase().includes(q) && !vistos.has(a.id + it.nombre)) {
-                  vistos.add(a.id + it.nombre);
+              const est = normalizarEstado(a.estado);
+              (a.items || []).forEach((it, idx) => {
+                if (coincideBusqueda(buscarDisfraz, [it.nombre, it.talle, it.descripcion])) {
                   resultados.push({
-                    id: a.id,
+                    key: `${a.id}-${idx}`,
                     alquilerId: a.id,
                     item: it.nombre,
                     talle: it.talle || '',
@@ -527,29 +542,33 @@ export default function Reportes() {
                     cliente: a.clienteNombre,
                     telefono: a.clienteTelefonoPrincipal || a.clienteTelefono?.split(' / ')[0] || '',
                     fecha: a.fechaAlquiler,
+                    fechaDevolucion: a.fechaDevolucion || '',
+                    estado: est,
                   });
                 }
               });
             });
-            resultados.sort((a, b) => a.item.localeCompare(b.item));
+            resultados.sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '') || (a.item || '').localeCompare(b.item || ''));
             return (
               <div className="table-wrapper">
               <table className="table">
-                <thead><tr><th>Item</th><th>Foto</th><th>Cliente</th><th>Teléfono</th><th>Fecha</th></tr></thead>
+                <thead><tr><th>Item</th><th>Foto</th><th>Cliente</th><th>Teléfono</th><th>Estado</th><th>Alquiler</th><th>Devolución</th></tr></thead>
                 <tbody>
-                  {resultados.map((r, i) => (
-                    <tr key={r.alquilerId + i}>
+                  {resultados.map((r) => (
+                    <tr key={r.key}>
                       <td>{r.item}{r.talle ? ` (${r.talle})` : ''}</td>
-                      <td>{r.fotoUrl && !esDriveUrl(r.fotoUrl) ? <img src={r.fotoUrl} alt={r.item} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
-                        {r.fotoUrl && esDriveUrl(r.fotoUrl) ? <img src={getDriveImageUrl(r.fotoUrl)} alt={r.item} className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
+                      <td>{r.fotoUrl && !esDriveUrl(r.fotoUrl) ? <img src={r.fotoUrl} alt={r.item} loading="lazy" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
+                        {r.fotoUrl && esDriveUrl(r.fotoUrl) ? <img src={getDriveImageUrl(r.fotoUrl)} alt={r.item} loading="lazy" className="thumb" style={{ cursor: 'pointer' }} onClick={() => setFotoAmpliada(r.fotoUrl)} /> : null}
                         {!r.fotoUrl ? <span className="text-muted">—</span> : null}
                       </td>
                       <td>{r.cliente}</td>
                       <td>{r.telefono ? <a href={`https://wa.me/54${r.telefono.replace(/[^0-9]/g, '')}`} target="_blank" rel="noreferrer">📞 {r.telefono}</a> : '-'}</td>
+                      <td><span className={`badge badge-${r.estado}`}>{r.estado}</span></td>
                       <td>{r.fecha || '-'}</td>
+                      <td>{r.fechaDevolucion || '-'}</td>
                     </tr>
                   ))}
-                  {resultados.length === 0 && <tr><td colSpan={5} className="text-muted">Sin resultados</td></tr>}
+                  {resultados.length === 0 && <tr><td colSpan={7} className="text-muted">Sin resultados</td></tr>}
                 </tbody>
               </table>
               </div>

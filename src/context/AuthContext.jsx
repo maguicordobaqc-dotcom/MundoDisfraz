@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { auth } from '../firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { clearAllCache } from '../utils/dataCache';
 
 const AuthContext = createContext();
 
@@ -21,7 +22,10 @@ export function AuthProvider({ children }) {
   const login = (email, password) =>
     signInWithEmailAndPassword(auth, email, password);
 
-  const logout = () => signOut(auth);
+  const logout = () => {
+    clearAllCache();
+    return signOut(auth);
+  };
 
   return (
     <AuthContext.Provider value={{ user, login, logout }}>

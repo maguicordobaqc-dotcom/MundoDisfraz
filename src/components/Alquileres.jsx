@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react';
-import { collection, query, orderBy, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { initTopScrollbar } from '../utils/topScrollbar';
 import { getWhatsAppReceiptUrl, getWhatsAppReminderUrl } from '../utils/receipt';
+import { ESTADOS_ALQUILER, normalizarEstado } from '../utils/estados';
+import { coincideBusqueda } from '../utils/search';
+import { getAlquileres, upsertAlquilerCache, removeAlquilerCache } from '../utils/dataCache';
 import FotoModal from './FotoModal';
 
 function esDriveUrl(url) {
-  return url && url.includes('drive.google.com');
+  return url && (url.includes('drive.google.com') || url.includes('googleusercontent'));
 }
 
 function getDriveImageUrl(url) {
-  const match = url && url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? `https://drive.google.com/uc?export=view&id=${match[1]}` : url;
+  const match = url && url.match(/[-\w]{25,}/);
+  return match ? `https://drive.google.com/thumbnail?id=${match[0]}&sz=w400-h400` : url;
 }
 
 function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
@@ -49,35 +52,67 @@ export default function Alquileres() {
   const [err, setErr] = useState('');
   const [sortField, setSortField] = useState('fechaAlquiler');
   const [sortDir, setSortDir] = useState('desc');
+  const [modoBusqueda, setModoBusqueda] = useState('cliente');
   const [searchCliente, setSearchCliente] = useState('');
+  const [searchDisfraz, setSearchDisfraz] = useState('');
   const [editando, setEditando] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [fotoAmpliada, setFotoAmpliada] = useState(null);
+  const [cargando, setCargando] = useState(true);
 
-  const cargar = async () => {
-    const q = query(collection(db, 'alquileres'), orderBy('createdAt', 'desc'));
-    const snap = await getDocs(q);
-    setAlquileres(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  const cargar = async (force = false) => {
+    setCargando(true);
+    setErr('');
+    try {
+      const data = await getAlquileres(force);
+      setAlquileres(data);
+    } catch (e) {
+      setErr('Error al cargar alquileres: ' + e.message);
+    } finally {
+      setCargando(false);
+    }
   };
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(false); }, []);
 
-  useEffect(() => { setTimeout(initTopScrollbar, 300); }, [alquileres]);
+  useEffect(() => { setTimeout(initTopScrollbar, 300); }, [alquileres, modoBusqueda]);
 
   const cambiarEstado = async (id, nuevoEstado, alquiler) => {
     const data = { estado: nuevoEstado };
     if (nuevoEstado === 'devuelto' && alquiler?.garantia && !alquiler.garantiaDevuelta) {
       data.garantiaDevuelta = true;
     }
-    await updateDoc(doc(db, 'alquileres', id), data);
-    cargar();
+    try {
+      await updateDoc(doc(db, 'alquileres', id), data);
+      const updated = upsertAlquilerCache(id, data);
+      if (updated) {
+        setAlquileres(updated);
+      } else {
+        setAlquileres((prev) => prev.map((a) => (a.id === id ? { ...a, ...data } : a)));
+      }
+      if (detalle?.id === id) setDetalle((prev) => (prev ? { ...prev, ...data } : prev));
+    } catch (e) {
+      setErr('Error al cambiar estado: ' + e.message);
+      setTimeout(() => setErr(''), 5000);
+    }
   };
 
   const borrar = async (id) => {
     if (!window.confirm('¿Estás seguro de eliminar este alquiler?')) return;
-    await deleteDoc(doc(db, 'alquileres', id));
-    setEditando(null);
-    cargar();
+    try {
+      await deleteDoc(doc(db, 'alquileres', id));
+      const updated = removeAlquilerCache(id);
+      if (updated) {
+        setAlquileres(updated);
+      } else {
+        setAlquileres((prev) => prev.filter((a) => a.id !== id));
+      }
+      if (detalle?.id === id) setDetalle(null);
+      setEditando(null);
+    } catch (e) {
+      setErr('Error al eliminar: ' + e.message);
+      setTimeout(() => setErr(''), 5000);
+    }
   };
 
   const abrirEditar = (a) => {
@@ -97,7 +132,7 @@ export default function Alquileres() {
       garantia: a.garantia || '',
       garantiaDevuelta: a.garantiaDevuelta || false,
       nota: a.nota || '',
-      estado: a.estado || 'pendiente',
+      estado: normalizarEstado(a.estado),
     });
   };
 
@@ -134,10 +169,16 @@ export default function Alquileres() {
         data.garantiaDevuelta = true;
       }
       await updateDoc(doc(db, 'alquileres', id), data);
+      const updated = upsertAlquilerCache(id, data);
+      if (updated) {
+        setAlquileres(updated);
+      } else {
+        setAlquileres((prev) => prev.map((a) => (a.id === id ? { ...a, ...data } : a)));
+      }
+      if (detalle?.id === id) setDetalle((prev) => (prev ? { ...prev, ...data } : prev));
       setEditando(null);
       setMsg('Alquiler actualizado');
       setTimeout(() => setMsg(''), 3000);
-      cargar();
     } catch (e) {
       setErr('Error al guardar: ' + e.message);
       setTimeout(() => setErr(''), 5000);
@@ -158,20 +199,28 @@ export default function Alquileres() {
     return sortDir === 'asc' ? ' ↑' : ' ↓';
   };
 
-  let filtrados = alquileres.filter((a) => filter === 'todos' || a.estado === filter);
-  if (filtroFechaDev) {
-    filtrados = filtrados.filter((a) => a.fechaDevolucion === filtroFechaDev);
-  }
+  const porTexto = searchCliente.trim()
+    ? alquileres.filter((a) => coincideBusqueda(searchCliente, [a.clienteNombre, a.clienteApellido]))
+    : alquileres;
 
-  if (searchCliente.trim()) {
-    const q = searchCliente.trim().toLowerCase();
-    filtrados = filtrados.filter((a) =>
-      (a.clienteNombre || '').toLowerCase().includes(q)
-    );
-  }
+  const porTextoYFecha = filtroFechaDev
+    ? porTexto.filter((a) => a.fechaDevolucion === filtroFechaDev)
+    : porTexto;
+
+  const conteosCliente = {
+    todos: porTextoYFecha.length,
+    reservado: porTextoYFecha.filter((a) => normalizarEstado(a.estado) === 'reservado').length,
+    retirado: porTextoYFecha.filter((a) => normalizarEstado(a.estado) === 'retirado').length,
+    devuelto: porTextoYFecha.filter((a) => normalizarEstado(a.estado) === 'devuelto').length,
+  };
+
+  let filtrados = filter === 'todos'
+    ? [...porTextoYFecha]
+    : porTextoYFecha.filter((a) => normalizarEstado(a.estado) === filter);
 
   filtrados.sort((a, b) => {
-    let va = a[sortField] ?? '', vb = b[sortField] ?? '';
+    let va = sortField === 'estado' ? normalizarEstado(a.estado) : (a[sortField] ?? '');
+    let vb = sortField === 'estado' ? normalizarEstado(b.estado) : (b[sortField] ?? '');
     if (sortField === 'precio' || sortField === 'seña') {
       va = Number(va); vb = Number(vb);
     } else {
@@ -183,25 +232,114 @@ export default function Alquileres() {
     return 0;
   });
 
+  // ─── Búsqueda por Disfraz ──────────────────────────────────────────
+  const itemsPorDisfrazTexto = [];
+  if (modoBusqueda === 'disfraz') {
+    const qDisfraz = searchDisfraz.trim();
+    alquileres.forEach((a) => {
+      (a.items || []).forEach((it, idx) => {
+        if (!qDisfraz || coincideBusqueda(qDisfraz, [it.nombre, it.talle, it.descripcion])) {
+          itemsPorDisfrazTexto.push({
+            key: `${a.id}-${idx}`,
+            alquiler: a,
+            item: it,
+            estadoNorm: normalizarEstado(a.estado),
+          });
+        }
+      });
+    });
+  }
+
+  const itemsDisfrazTextoYFecha = filtroFechaDev
+    ? itemsPorDisfrazTexto.filter((row) => row.alquiler.fechaDevolucion === filtroFechaDev)
+    : itemsPorDisfrazTexto;
+
+  const conteosDisfraz = {
+    todos: itemsDisfrazTextoYFecha.length,
+    reservado: itemsDisfrazTextoYFecha.filter((r) => r.estadoNorm === 'reservado').length,
+    retirado: itemsDisfrazTextoYFecha.filter((r) => r.estadoNorm === 'retirado').length,
+    devuelto: itemsDisfrazTextoYFecha.filter((r) => r.estadoNorm === 'devuelto').length,
+  };
+
+  const mostrarListaDisfraz = searchDisfraz.trim().length >= 2 || filter !== 'todos' || Boolean(filtroFechaDev);
+  const disfracesFiltrados = mostrarListaDisfraz
+    ? (filter === 'todos'
+        ? [...itemsDisfrazTextoYFecha]
+        : itemsDisfrazTextoYFecha.filter((r) => r.estadoNorm === filter)
+      ).sort((a, b) => {
+        const fa = a.alquiler.fechaAlquiler || '';
+        const fb = b.alquiler.fechaAlquiler || '';
+        if (fa !== fb) return fb.localeCompare(fa);
+        return (b.alquiler.createdAt?.seconds || 0) - (a.alquiler.createdAt?.seconds || 0);
+      })
+    : [];
+
+  const conteos = modoBusqueda === 'disfraz' ? conteosDisfraz : conteosCliente;
+
   return (
     <div className="page">
-      <h2>Alquileres</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Alquileres</h2>
+        <button onClick={() => cargar(true)} className="btn btn-secondary btn-small" disabled={cargando}>
+          {cargando ? 'Cargando...' : '🔄 Actualizar'}
+        </button>
+      </div>
       {msg && <div className="alert alert-success">{msg}</div>}
       {err && <div className="alert alert-error">{err}</div>}
 
-      <div className="search-box">
-        <input
-          placeholder="Buscar por nombre de cliente..."
-          value={searchCliente}
-          onChange={(e) => setSearchCliente(e.target.value)}
-        />
-        <button onClick={() => { setSearchCliente(''); setDetalle(null); }} className="btn btn-secondary">Limpiar</button>
+      <div className="tabs" style={{ marginBottom: 12 }}>
+        <button
+          className={`tab ${modoBusqueda === 'cliente' ? 'active' : ''}`}
+          onClick={() => { setModoBusqueda('cliente'); setDetalle(null); }}
+        >
+          👤 Por Cliente
+        </button>
+        <button
+          className={`tab ${modoBusqueda === 'disfraz' ? 'active' : ''}`}
+          onClick={() => { setModoBusqueda('disfraz'); setDetalle(null); }}
+        >
+          🎭 Por Disfraz
+        </button>
       </div>
 
+      {modoBusqueda === 'cliente' ? (
+        <div className="search-box">
+          <input
+            placeholder="Buscar por apellido o nombre (ej: torres, juan torres)..."
+            value={searchCliente}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (!searchCliente.trim() && val.trim() && filter !== 'todos') {
+                setFilter('todos');
+              }
+              setSearchCliente(val);
+              setDetalle(null);
+            }}
+          />
+          <button onClick={() => { setSearchCliente(''); setDetalle(null); }} className="btn btn-secondary">Limpiar</button>
+        </div>
+      ) : (
+        <div className="search-box">
+          <input
+            placeholder="Buscar disfraz por nombre o talle (ej: spiderman, princesa, granadero)..."
+            value={searchDisfraz}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (!searchDisfraz.trim() && val.trim() && filter !== 'todos') {
+                setFilter('todos');
+              }
+              setSearchDisfraz(val);
+              setDetalle(null);
+            }}
+          />
+          <button onClick={() => { setSearchDisfraz(''); setDetalle(null); }} className="btn btn-secondary">Limpiar</button>
+        </div>
+      )}
+
       <div className="tabs">
-        {['todos', 'pendiente', 'retirado', 'entregado', 'devuelto', 'reservado'].map((t) => (
+        {['todos', ...ESTADOS_ALQUILER.map((e) => e.value)].map((t) => (
           <button key={t} className={`tab ${filter === t ? 'active' : ''}`} onClick={() => { setFilter(t); setDetalle(null); }}>
-            {t === 'todos' ? 'Todos' : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === 'todos' ? 'Todos' : t.charAt(0).toUpperCase() + t.slice(1)} ({conteos[t] ?? 0})
           </button>
         ))}
       </div>
@@ -214,6 +352,7 @@ export default function Alquileres() {
         {filtroFechaDev && <button className="btn btn-small btn-secondary" onClick={() => setFiltroFechaDev('')}>Limpiar fecha</button>}
       </div>
 
+      {modoBusqueda === 'cliente' ? (
       <div className="table-wrapper">
       <table className="table">
         <thead>
@@ -253,10 +392,10 @@ export default function Alquileres() {
               </td>
               <td>${a.precio}</td>
               <td className="col-garantia">{a.garantiaDevuelta ? '✅' : a.garantia ? '❌' : '-'}</td>
-              <td><span className={`badge badge-${a.estado}`}>{a.estado}</span></td>
+              <td><span className={`badge badge-${normalizarEstado(a.estado)}`}>{normalizarEstado(a.estado)}</span></td>
               <td>
                 <select
-                  value={a.estado}
+                  value={normalizarEstado(a.estado)}
                   onChange={(e) => {
                     const nuevoEstado = e.target.value;
                     cambiarEstado(a.id, nuevoEstado, a);
@@ -264,11 +403,9 @@ export default function Alquileres() {
                   }}
                   className="estado-select"
                 >
-                  <option value="pendiente">Pendiente</option>
-                  <option value="reservado">Reservado</option>
-                  <option value="retirado">Retirado</option>
-                  <option value="entregado">Entregado</option>
-                  <option value="devuelto">Devuelto</option>
+                  {ESTADOS_ALQUILER.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
+                  ))}
                 </select>
               </td>
               <td>
@@ -277,28 +414,185 @@ export default function Alquileres() {
               </td>
             </tr>
           ))}
-          {filtrados.length === 0 && (
-            <tr><td colSpan={10} className="text-muted">No hay alquileres</td></tr>
+          {cargando && (
+            <tr><td colSpan={10} className="text-muted">Cargando alquileres...</td></tr>
+          )}
+          {!cargando && filtrados.length === 0 && (
+            <tr>
+              <td colSpan={10} className="text-muted">
+                {filter !== 'todos' && conteosCliente.todos > 0 ? (
+                  <span>
+                    No hay alquileres en "{filter}".{' '}
+                    <button type="button" className="btn-link" style={{ fontWeight: 600 }} onClick={() => setFilter('todos')}>
+                      Ver los {conteosCliente.todos} resultado{conteosCliente.todos !== 1 ? 's' : ''} en Todos
+                    </button>
+                  </span>
+                ) : filtroFechaDev && porTexto.length > 0 ? (
+                  <span>
+                    No hay alquileres para la fecha de devolución {filtroFechaDev} (hay {porTexto.length} coincidencia{porTexto.length !== 1 ? 's' : ''} en otras fechas).{' '}
+                    <button type="button" className="btn-link" style={{ fontWeight: 600 }} onClick={() => setFiltroFechaDev('')}>
+                      Quitar filtro de fecha
+                    </button>
+                  </span>
+                ) : (
+                  'No hay alquileres'
+                )}
+              </td>
+            </tr>
           )}
         </tbody>
       </table>
       </div>
+      ) : (
+      <div className="table-wrapper">
+      {!cargando && !mostrarListaDisfraz ? (
+        <div className="card" style={{ textAlign: 'center', padding: 24 }}>
+          <p className="text-muted" style={{ marginBottom: 12 }}>
+            Escribí al menos <strong>2 letras</strong> del disfraz que buscás (ej: <em>spiderman</em>, <em>princesa</em>, <em>granadero</em>) para ver todas las fotos y quién se lo llevó.
+          </p>
+          {conteosDisfraz.retirado > 0 && (
+            <button type="button" className="btn btn-primary" onClick={() => setFilter('retirado')}>
+              🎭 Ver todos los disfraces sin devolver ({conteosDisfraz.retirado} en Retirado)
+            </button>
+          )}
+        </div>
+      ) : (
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Foto</th>
+            <th>Disfraz</th>
+            <th>Cliente / Contacto</th>
+            <th>Fechas</th>
+            <th>Estado</th>
+            <th>Acción</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {disfracesFiltrados.map(({ key, alquiler: a, item: it, estadoNorm }) => {
+            const telPrincipal = (a.clienteTelefonoPrincipal || a.clienteTelefono?.split(' / ')[0] || '').trim();
+            const telClean = telPrincipal.replace(/[^0-9]/g, '');
+            const waReceipt = getWhatsAppReceiptUrl(a);
+            const waReminder = getWhatsAppReminderUrl(a);
+            return (
+              <tr key={key}>
+                <td style={{ width: 76 }}>
+                  {it.fotoUrl ? (
+                    <img
+                      src={esDriveUrl(it.fotoUrl) ? getDriveImageUrl(it.fotoUrl) : it.fotoUrl}
+                      alt={it.nombre}
+                      loading="lazy"
+                      className="thumb"
+                      style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'pointer' }}
+                      onClick={() => setFotoAmpliada(it.fotoUrl)}
+                      onError={(e) => { e.target.style.display = 'none'; }}
+                    />
+                  ) : (
+                    <span className="text-muted" style={{ fontSize: '0.8rem' }}>Sin foto</span>
+                  )}
+                </td>
+                <td>
+                  <strong>{it.nombre || 'Sin nombre'}</strong>
+                  {it.talle && <div className="text-muted" style={{ fontSize: '0.8rem' }}>Talle: {it.talle}</div>}
+                  {a.colegio && <div className="text-muted" style={{ fontSize: '0.8rem' }}>{a.colegio}</div>}
+                </td>
+                <td>
+                  <div style={{ fontWeight: 600 }}>{a.clienteNombre}</div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                    {telClean && (
+                      <a href={`https://wa.me/54${telClean}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', textDecoration: 'none', color: 'var(--primary)', fontWeight: 600 }}>
+                        📞 {telPrincipal}
+                      </a>
+                    )}
+                    {waReceipt && <a href={waReceipt} target="_blank" rel="noreferrer" className="btn-link" style={{ textDecoration: 'none', padding: '2px 8px', background: '#f0f2f5', borderRadius: 6 }} title="Comprobante">📤</a>}
+                    {waReminder && <a href={waReminder} target="_blank" rel="noreferrer" className="btn-link" style={{ textDecoration: 'none', padding: '2px 8px', background: '#ffe0e0', borderRadius: 6 }} title="Fuera de término">⚠️</a>}
+                  </div>
+                </td>
+                <td style={{ whiteSpace: 'nowrap', fontSize: '0.85rem' }}>
+                  <div>Alq: {a.fechaAlquiler || '-'}</div>
+                  <div className="text-muted">Dev: {a.fechaDevolucion || '-'}</div>
+                </td>
+                <td><span className={`badge badge-${estadoNorm}`}>{estadoNorm}</span></td>
+                <td>
+                  <select
+                    value={estadoNorm}
+                    onChange={(e) => {
+                      const nuevoEstado = e.target.value;
+                      cambiarEstado(a.id, nuevoEstado, a);
+                      if (detalle?.id === a.id) setDetalle({ ...detalle, estado: nuevoEstado });
+                    }}
+                    className="estado-select"
+                  >
+                    {ESTADOS_ALQUILER.map((e) => (
+                      <option key={e.value} value={e.value}>{e.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button
+                    onClick={() => {
+                      setDetalle(detalle?.id === a.id ? null : a);
+                      setTimeout(() => {
+                        const el = document.getElementById('detalle-alquiler');
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }, 100);
+                    }}
+                    className="btn btn-small btn-secondary"
+                    title="Ver ficha completa"
+                  >
+                    👁️
+                  </button>
+                  <button onClick={() => abrirEditar(a)} className="btn btn-small btn-secondary" style={{ marginLeft: 4 }} title="Editar">✏️</button>
+                </td>
+              </tr>
+            );
+          })}
+          {cargando && (
+            <tr><td colSpan={7} className="text-muted">Cargando disfraces...</td></tr>
+          )}
+          {!cargando && disfracesFiltrados.length === 0 && (
+            <tr>
+              <td colSpan={7} className="text-muted">
+                {filter !== 'todos' && conteosDisfraz.todos > 0 ? (
+                  <span>
+                    No hay disfraces en "{filter}".{' '}
+                    <button type="button" className="btn-link" style={{ fontWeight: 600 }} onClick={() => setFilter('todos')}>
+                      Ver los {conteosDisfraz.todos} resultado{conteosDisfraz.todos !== 1 ? 's' : ''} en Todos
+                    </button>
+                  </span>
+                ) : filtroFechaDev && itemsPorDisfrazTexto.length > 0 ? (
+                  <span>
+                    No hay disfraces para la fecha de devolución {filtroFechaDev} (hay {itemsPorDisfrazTexto.length} coincidencia{itemsPorDisfrazTexto.length !== 1 ? 's' : ''} en otras fechas).{' '}
+                    <button type="button" className="btn-link" style={{ fontWeight: 600 }} onClick={() => setFiltroFechaDev('')}>
+                      Quitar filtro de fecha
+                    </button>
+                  </span>
+                ) : (
+                  'No se encontraron disfraces con esa búsqueda'
+                )}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      )}
+      </div>
+      )}
 
       {detalle && (
         <div className="card" id="detalle-alquiler">
           <div className="flex gap" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
             <h3 style={{ flex: 1, margin: 0 }}>Detalle de {detalle.clienteNombre}</h3>
             <div className="flex gap" style={{ alignItems: 'center' }}>
-              <select value={detalle.estado} onChange={(e) => {
+              <select value={normalizarEstado(detalle.estado)} onChange={(e) => {
                 const nuevoEstado = e.target.value;
                 cambiarEstado(detalle.id, nuevoEstado, detalle);
                 setDetalle({ ...detalle, estado: nuevoEstado });
               }} className="estado-select" style={{ padding: '8px 12px', fontSize: '0.9rem' }}>
-                <option value="pendiente">Pendiente</option>
-                <option value="reservado">Reservado</option>
-                <option value="retirado">Retirado</option>
-                <option value="entregado">Entregado</option>
-                <option value="devuelto">Devuelto</option>
+                {ESTADOS_ALQUILER.map((e) => (
+                  <option key={e.value} value={e.value}>{e.label}</option>
+                ))}
               </select>
               <button onClick={() => abrirEditar(detalle)} className="btn btn-small btn-primary">✏️ Editar</button>
               {(() => { const url = getWhatsAppReceiptUrl(detalle); return url ? <a href={url} target="_blank" rel="noreferrer" className="btn btn-small btn-primary" style={{ textDecoration: 'none' }}>📤 Comprobante</a> : null; })()}
@@ -354,11 +648,9 @@ export default function Alquileres() {
               <div className="form-group">
                 <label>Estado</label>
                 <select value={editForm.estado} onChange={(e) => setEditForm({ ...editForm, estado: e.target.value })}>
-                  <option value="pendiente">Pendiente</option>
-                  <option value="reservado">Reservado</option>
-                  <option value="retirado">Retirado</option>
-                  <option value="entregado">Entregado</option>
-                  <option value="devuelto">Devuelto</option>
+                  {ESTADOS_ALQUILER.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
+                  ))}
                 </select>
               </div>
             </div>

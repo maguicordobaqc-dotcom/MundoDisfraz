@@ -3,6 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import { collection, query, where, orderBy, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getWhatsAppReceiptUrl } from '../utils/receipt';
+import { ESTADOS_ALQUILER, ESTADO_DEFAULT, normalizarEstado } from '../utils/estados';
+import { coincideBusqueda } from '../utils/search';
+import { getClientes, upsertClienteCache, upsertAlquilerCache } from '../utils/dataCache';
 
 function comprimirImagen(file, maxAncho = 1024, calidad = 0.6) {
   return new Promise((resolve, reject) => {
@@ -47,7 +50,7 @@ export default function NuevoAlquiler() {
   const [garantia, setGarantia] = useState('');
   const [garantiaDevuelta, setGarantiaDevuelta] = useState(false);
   const [nota, setNota] = useState('');
-  const [estado, setEstado] = useState('pendiente');
+  const [estado, setEstado] = useState(ESTADO_DEFAULT);
   const [subiendo, setSubiendo] = useState(false);
   const [exito, setExito] = useState('');
   const [error, setError] = useState('');
@@ -77,17 +80,16 @@ export default function NuevoAlquiler() {
 
   const buscarClientes = async () => {
     setBusco(true);
-    const q = searchApe.trim()
-      ? query(
-          collection(db, 'clientes'),
-          where('apellidoSearch', '>=', searchApe.trim().toLowerCase()),
-          where('apellidoSearch', '<=', searchApe.trim().toLowerCase() + '\uf8ff')
-        )
-      : query(collection(db, 'clientes'), orderBy('apellidoSearch', 'asc'));
-    const snap = await getDocs(q);
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    data.sort((a, b) => (a.apellido || '').localeCompare(b.apellido || ''));
-    setClientes(data);
+    try {
+      const todos = await getClientes(false);
+      const data = searchApe.trim()
+        ? todos.filter((c) => coincideBusqueda(searchApe, [c.apellido, c.nombre, c.telefono, c.telefonoPrincipal, c.telefonoSecundario]))
+        : todos;
+      setClientes(data);
+    } catch (err) {
+      console.error('Error al buscar clientes:', err);
+      setError('Error al buscar clientes: ' + err.message);
+    }
   };
 
   const selectCliente = async (c) => {
@@ -177,7 +179,7 @@ export default function NuevoAlquiler() {
         }
       }
 
-      await addDoc(collection(db, 'alquileres'), {
+      const nuevoAlquilerData = {
         clienteId: cliente.id,
         clienteNombre: `${cliente.apellido?.toUpperCase()}, ${cliente.nombre}`,
         clienteApellido: cliente.apellido?.toUpperCase(),
@@ -198,7 +200,9 @@ export default function NuevoAlquiler() {
         nota,
         estado,
         createdAt: serverTimestamp()
-      });
+      };
+      const newAlqRef = await addDoc(collection(db, 'alquileres'), nuevoAlquilerData);
+      upsertAlquilerCache(newAlqRef.id, { ...nuevoAlquilerData, createdAt: { seconds: Math.floor(Date.now() / 1000) } }, true);
 
       setExito('¡Alquiler registrado con éxito!');
       const telPrincipal = (cliente?.telefonoPrincipal || (cliente?.telefono || '').split(' / ')[0] || '').trim();
@@ -227,7 +231,7 @@ export default function NuevoAlquiler() {
       }
       setStep(1); setCliente(null); setItems([{ nombre: '', talle: '', file: null, preview: '', fotoUrl: '' }]);
       setFechaAlquiler(''); setFechaEvento(''); setFechaDevolucion(''); setTurno('mañana'); setColegio('');
-      setPrecio('17000'); setSeña('0'); setGarantia(''); setGarantiaDevuelta(false); setNota(''); setEstado('pendiente');
+      setPrecio('17000'); setSeña('0'); setGarantia(''); setGarantiaDevuelta(false); setNota(''); setEstado(ESTADO_DEFAULT);
       setSearchApe(''); setClientes([]); setBusco(false);
       setTimeout(() => setExito(''), 4000);
     } catch (err) {
@@ -283,7 +287,7 @@ export default function NuevoAlquiler() {
           <h3>Seleccionar Cliente</h3>
           <div className="search-box">
             <input
-              placeholder="Buscar por apellido..."
+              placeholder="Buscar por apellido, nombre o teléfono..."
               value={searchApe}
               onChange={(e) => { setSearchApe(e.target.value); setBusco(false); }}
               onKeyDown={(e) => e.key === 'Enter' && buscarClientes()}
@@ -319,7 +323,7 @@ export default function NuevoAlquiler() {
                 const nombre = form.nombre.value.trim();
                 const apellido = form.apellido.value.trim();
                 if (!nombre || !apellido) return;
-                const ref = await addDoc(collection(db, 'clientes'), {
+                const nuevoClienteData = {
                   nombre, apellido,
                   direccion: form.direccion.value.trim(),
                   telefonoPrincipal: form.telefonoPrincipal.value.trim(),
@@ -328,8 +332,10 @@ export default function NuevoAlquiler() {
                   apellidoSearch: apellido.toLowerCase(),
                   nombreSearch: nombre.toLowerCase(),
                   createdAt: serverTimestamp()
-                });
-                const nuevoCliente = { id: ref.id, nombre, apellido, direccion: form.direccion.value.trim(), telefonoPrincipal: form.telefonoPrincipal.value.trim(), telefonoSecundario: form.telefonoSecundario.value.trim() };
+                };
+                const ref = await addDoc(collection(db, 'clientes'), nuevoClienteData);
+                upsertClienteCache(ref.id, nuevoClienteData, true);
+                const nuevoCliente = { id: ref.id, ...nuevoClienteData };
                 selectCliente(nuevoCliente);
               }}>
                 <div className="form-row">
@@ -373,7 +379,7 @@ export default function NuevoAlquiler() {
                         <td>{h.fechaEvento || '-'}</td>
                         <td>{(h.items || []).map((i) => i.nombre).join(', ')}</td>
                         <td>${h.precio}</td>
-                        <td><span className={`badge badge-${h.estado}`}>{h.estado}</span></td>
+                        <td><span className={`badge badge-${normalizarEstado(h.estado)}`}>{normalizarEstado(h.estado)}</span></td>
                       </tr>
                     ))}
                   </tbody>
@@ -482,11 +488,9 @@ export default function NuevoAlquiler() {
             <div className="form-group">
               <label>Estado</label>
               <select value={estado} onChange={(e) => setEstado(e.target.value)}>
-                <option value="pendiente">Pendiente</option>
-                <option value="reservado">Reservado</option>
-                <option value="retirado">Retirado</option>
-                <option value="entregado">Entregado</option>
-                <option value="devuelto">Devuelto</option>
+                {ESTADOS_ALQUILER.map((e) => (
+                  <option key={e.value} value={e.value}>{e.label}</option>
+                ))}
               </select>
             </div>
 
